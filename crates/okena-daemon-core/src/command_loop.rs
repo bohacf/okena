@@ -2933,6 +2933,26 @@ pub async fn daemon_command_loop(
         };
 
         let command = match command {
+            // WSL discovery runs a subprocess.
+            RemoteCommand::Action(ActionRequest::ListStartPageShells) => {
+                spawn_blocking_command_with(reply, &runtime, || {
+                    use okena_core::shell::{ShellType, StartPageShellOption};
+
+                    let shells: Vec<_> = okena_terminal::shell_config::available_shells()
+                        .into_iter()
+                        .filter(|shell| shell.available && shell.shell_type != ShellType::Default)
+                        .map(|shell| StartPageShellOption {
+                            shell: shell.shell_type.into(),
+                            name: shell.name,
+                        })
+                        .collect();
+                    match serde_json::to_value(shells) {
+                        Ok(value) => CommandResult::Ok(Some(value)),
+                        Err(error) => CommandResult::Err(error.to_string()),
+                    }
+                });
+                continue;
+            }
             // Talks to the AI proxy over its management socket (and may start
             // it), so it runs off the loop.
             RemoteCommand::Action(ActionRequest::AiProxy { request }) => {
@@ -3267,8 +3287,18 @@ pub async fn daemon_command_loop(
                         terminal_id,
                     } => {
                         let grace = settings.lock().terminal_close_grace_secs;
+                        let waiting = workspace
+                            .lock()
+                            .project(&project_id)
+                            .and_then(|project| project.layout.as_ref())
+                            .and_then(|layout| {
+                                layout
+                                    .find_terminal_path(&terminal_id)
+                                    .and_then(|path| layout.get_at_path(&path))
+                            })
+                            .is_some_and(|node| node.start_page().is_some());
 
-                        if grace == 0 {
+                        if grace == 0 || waiting {
                             // Feature off → immediate close (unchanged behavior).
                             // Snapshot settings BEFORE locking the workspace.
                             let app_settings = settings.lock().clone();
@@ -3379,6 +3409,7 @@ pub async fn daemon_command_loop(
                     // seed the layout + fire on_project_open + spawn PTYs under a
                     // brief lock. On failure the row is rolled back and toasted.
                     ActionRequest::CloneProject {
+                        start_page,
                         url,
                         parent_dir,
                         directory,
@@ -3544,6 +3575,12 @@ pub async fn daemon_command_loop(
                                                         &app_settings.hooks,
                                                         &mut cx,
                                                     );
+                                                    if start_page {
+                                                        ws.defer_first_terminal(
+                                                            &new_id_task,
+                                                            &mut cx,
+                                                        );
+                                                    }
                                                     // Clear creating BEFORE spawning —
                                                     // spawn_uninitialized_terminals no-ops
                                                     // while the project is creating.
@@ -3645,7 +3682,10 @@ pub async fn daemon_command_loop(
                         layout,
                         terminal_name,
                         wait,
+                        start_page,
                     } => {
+                        let defer_terminal =
+                            start_page && !wait && layout.is_none() && terminal_name.is_none();
                         // Phase 0: resolve paths. Read settings first, then the
                         // workspace (settings-before-workspace lock order), and drop
                         // both before the blocking git runs.
@@ -3810,6 +3850,12 @@ pub async fn daemon_command_loop(
                                                             &app_settings.hooks,
                                                             &mut cx,
                                                         );
+                                                        if defer_terminal {
+                                                            ws.defer_first_terminal(
+                                                                &new_id_task,
+                                                                &mut cx,
+                                                            );
+                                                        }
                                                         // Clear creating BEFORE spawning — spawn_uninitialized_terminals
                                                         // no-ops while is_creating (guards against spawning into a
                                                         // not-yet-checked-out worktree). The checkout is done here, so the
@@ -7426,6 +7472,7 @@ mod tests {
             path: path.to_string(),
             layout: Some(LayoutNode::Terminal {
                 terminal_id: None,
+                start_page: None,
                 pending_agent_resume: None,
                 minimized: false,
                 detached: false,
@@ -8203,6 +8250,7 @@ mod tests {
             path: path.to_string(),
             layout: Some(LayoutNode::Terminal {
                 terminal_id: None,
+                start_page: None,
                 pending_agent_resume: None,
                 minimized: false,
                 detached: false,
@@ -8911,6 +8959,7 @@ mod tests {
             path: "/tmp".to_string(),
             layout: Some(LayoutNode::Terminal {
                 terminal_id: Some(terminal_id.to_string()),
+                start_page: None,
                 pending_agent_resume: None,
                 minimized: false,
                 detached: false,
@@ -9198,6 +9247,7 @@ mod tests {
                 path: "/tmp".to_string(),
                 layout: Some(LayoutNode::Terminal {
                     terminal_id: None,
+                    start_page: None,
                     pending_agent_resume: None,
                     minimized: false,
                     detached: false,
@@ -9304,6 +9354,7 @@ mod tests {
             children: vec![
                 LayoutNode::Terminal {
                     terminal_id: Some("active-in-checkout".to_string()),
+                    start_page: None,
                     pending_agent_resume: None,
                     minimized: false,
                     detached: false,
@@ -9312,6 +9363,7 @@ mod tests {
                 },
                 LayoutNode::Terminal {
                     terminal_id: Some("second-in-checkout".to_string()),
+                    start_page: None,
                     pending_agent_resume: None,
                     minimized: false,
                     detached: false,
@@ -9838,6 +9890,7 @@ mod tests {
         nested.terminal_names.clear();
         nested.layout = Some(LayoutNode::Terminal {
             terminal_id: Some("live-in-nested-directory".to_string()),
+            start_page: None,
             pending_agent_resume: None,
             minimized: false,
             detached: false,
@@ -9852,6 +9905,7 @@ mod tests {
         unaffected.terminal_names.clear();
         unaffected.layout = Some(LayoutNode::Terminal {
             terminal_id: Some("unaffected-live".to_string()),
+            start_page: None,
             pending_agent_resume: None,
             minimized: false,
             detached: false,
@@ -10819,6 +10873,7 @@ mod tests {
         let mut parent = plain_project("p1", repo.0.to_str().expect("utf-8 path"));
         let terminal = || LayoutNode::Terminal {
             terminal_id: None,
+            start_page: None,
             pending_agent_resume: None,
             minimized: false,
             detached: false,
@@ -10866,6 +10921,7 @@ mod tests {
                     layout: None,
                     terminal_name: None,
                     wait: true,
+                    start_page: false,
                 });
 
                 let created = request(&bridge_tx, create, "create").await;
@@ -10925,6 +10981,7 @@ mod tests {
                         layout: Some(WorktreeLayout::Single),
                         terminal_name: Some("agent".to_string()),
                         wait: true,
+                        start_page: true,
                     })
                 };
 
@@ -11009,6 +11066,7 @@ mod tests {
                     layout: Some(WorktreeLayout::Single),
                     terminal_name: None,
                     wait: true,
+                    start_page: false,
                 });
                 let created = request(&bridge_tx, create, "create").await;
                 assert!(
@@ -11073,6 +11131,7 @@ mod tests {
                     layout: Some(WorktreeLayout::Single),
                     terminal_name: None,
                     wait: true,
+                    start_page: false,
                 });
                 let created = request(&bridge_tx, create, "create").await;
                 assert!(
@@ -11169,6 +11228,7 @@ mod tests {
             path: repo_path.clone(),
             layout: Some(LayoutNode::Terminal {
                 terminal_id: Some("parent-term".to_string()),
+                start_page: None,
                 pending_agent_resume: None,
                 minimized: false,
                 detached: false,
@@ -11236,6 +11296,7 @@ mod tests {
                 layout: None,
                 terminal_name: None,
                 wait: false,
+                start_page: false,
             },
             &mut workspace,
             WindowId::Main,

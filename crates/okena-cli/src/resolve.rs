@@ -410,6 +410,7 @@ mod tests {
 
     fn term(id: &str) -> ApiLayoutNode {
         ApiLayoutNode::Terminal {
+            start_page: None,
             terminal_id: Some(id.into()),
             minimized: false,
             detached: false,

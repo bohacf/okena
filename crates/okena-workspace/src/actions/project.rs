@@ -670,6 +670,21 @@ impl Workspace {
         self.register_hook_results(hook_results, cx);
     }
 
+    /// Defer only a freshly seeded first pane. Restored layouts have their own
+    /// launch intent and must retain it.
+    pub fn defer_first_terminal(&mut self, project_id: &str, cx: &mut impl WorkspaceCx) {
+        self.with_project(project_id, cx, |project| {
+            if project.layout.as_ref() != Some(&LayoutNode::new_terminal()) {
+                return false;
+            }
+            project.layout = Some(LayoutNode::new_start_page(okena_core::api::StartPage {
+                id: uuid::Uuid::new_v4().to_string(),
+                cwd: project.path.clone(),
+            }));
+            true
+        });
+    }
+
     /// Add a new terminal to a project by splitting the root layout
     pub fn add_terminal(
         &mut self,
@@ -677,17 +692,28 @@ impl Workspace {
         project_id: &str,
         cx: &mut impl WorkspaceCx,
     ) {
+        self.add_terminal_with_leaf(focus_manager, project_id, LayoutNode::new_terminal(), cx);
+    }
+
+    pub fn add_terminal_with_leaf(
+        &mut self,
+        focus_manager: &mut FocusManager,
+        project_id: &str,
+        leaf: LayoutNode,
+        cx: &mut impl WorkspaceCx,
+    ) {
+        let page_id = leaf.start_page().map(|page| page.id.clone());
         if let Some(project) = self.project_mut(project_id) {
             if let Some(ref old_layout) = project.layout {
                 let old_layout = old_layout.clone();
                 project.layout = Some(LayoutNode::Split {
                     direction: crate::state::SplitDirection::Vertical,
                     sizes: vec![50.0, 50.0],
-                    children: vec![old_layout, LayoutNode::new_terminal()],
+                    children: vec![old_layout, leaf],
                 });
             } else {
                 // Project has no layout - create one with a terminal
-                project.layout = Some(LayoutNode::new_terminal());
+                project.layout = Some(leaf);
             }
             self.notify_data(cx);
         }
@@ -696,7 +722,10 @@ impl Workspace {
         let new_path = self
             .project(project_id)
             .and_then(|p| p.layout.as_ref())
-            .and_then(|l| l.find_uninitialized_terminal_path());
+            .and_then(|l| match &page_id {
+                Some(id) => l.find_terminal_path(id),
+                None => l.find_uninitialized_terminal_path(),
+            });
         if let Some(path) = new_path {
             self.set_focused_terminal(focus_manager, project_id.to_string(), path, cx);
         }
@@ -1909,6 +1938,7 @@ mod tests {
             children: vec![
                 LayoutNode::Terminal {
                     terminal_id: Some("layout-terminal".to_string()),
+                    start_page: None,
                     pending_agent_resume: None,
                     minimized: false,
                     detached: false,
@@ -1917,6 +1947,7 @@ mod tests {
                 },
                 LayoutNode::Terminal {
                     terminal_id: Some("stale-hook".to_string()),
+                    start_page: None,
                     pending_agent_resume: None,
                     minimized: true,
                     detached: true,
@@ -1962,6 +1993,7 @@ mod tests {
         let mut project = make_project("p1");
         project.layout = Some(LayoutNode::Terminal {
             terminal_id: Some("stale-hook".to_string()),
+            start_page: None,
             pending_agent_resume: None,
             minimized: false,
             detached: false,

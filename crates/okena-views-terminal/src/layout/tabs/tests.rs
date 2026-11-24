@@ -114,6 +114,24 @@ fn header(
     RecordedActions,
     VisualTestContext,
 ) {
+    header_with_children(
+        cx,
+        width,
+        show_shell,
+        vec![terminal("first"), terminal("second")],
+    )
+}
+
+fn header_with_children(
+    cx: &mut TestAppContext,
+    width: f32,
+    show_shell: bool,
+    children: Vec<LayoutNode>,
+) -> (
+    Entity<LayoutContainer<RecordedActions>>,
+    RecordedActions,
+    VisualTestContext,
+) {
     cx.update(|cx| {
         cx.set_global(okena_ui::theme::GlobalThemeProvider(|_| {
             okena_ui::theme::DARK_THEME
@@ -149,6 +167,7 @@ fn header(
             Rc::new(RefCell::new(None)),
             pane_move,
             Some(actions.clone()),
+            |cx| cx.new(|_| gpui::Empty).into(),
             cx,
         )
     });
@@ -158,7 +177,7 @@ fn header(
             cx.observe(&container, |_, _, cx| cx.notify()).detach();
             Header {
                 container,
-                children: vec![terminal("first"), terminal("second")],
+                children,
             }
         }
     });
@@ -187,6 +206,48 @@ fn hover_actions_keep_active_target_until_a_tab_is_clicked(cx: &mut TestAppConte
         matches!(actions.0.lock().last(), Some(ActionRequest::CloseTerminal {terminal_id, ..}) if terminal_id == "second")
     );
     assert!(container.read_with(cx, |c, _| c.tab_rename_state.is_none()));
+}
+
+#[gpui::test]
+fn pending_tabs_keep_separate_close_targets(cx: &mut TestAppContext) {
+    let pending = |id: &str| {
+        let mut node = LayoutNode::new_terminal();
+        if let LayoutNode::Terminal { start_page, .. } = &mut node {
+            *start_page = Some(okena_core::api::StartPage {
+                id: id.into(),
+                cwd: ".".into(),
+            });
+        }
+        node
+    };
+    let (container, actions, mut visual) = header_with_children(
+        cx,
+        400.,
+        true,
+        vec![pending("first-page"), pending("second-page")],
+    );
+
+    visual.simulate_mouse_move(point(px(10.0), px(220.0)), None, Default::default());
+    let second = visual.debug_bounds("hover-source-1").unwrap();
+    visual.simulate_mouse_move(second.center(), None, Default::default());
+    let close = visual.debug_bounds("close-btn-tabs-[]").unwrap();
+    visual.simulate_click(close.center(), Default::default());
+    assert!(
+        matches!(actions.0.lock().last(), Some(ActionRequest::CloseTerminal { terminal_id, .. }) if terminal_id == "first-page")
+    );
+
+    visual.simulate_click(second.center(), Default::default());
+    assert!(matches!(
+        actions.0.lock().last(),
+        Some(ActionRequest::SetActiveTab { index: 1, .. })
+    ));
+    container.update(cx, |_, cx| cx.notify());
+    visual.simulate_mouse_move(second.center(), None, Default::default());
+    let close = visual.debug_bounds("close-btn-tabs-[]").unwrap();
+    visual.simulate_click(close.center(), Default::default());
+    assert!(
+        matches!(actions.0.lock().last(), Some(ActionRequest::CloseTerminal { terminal_id, .. }) if terminal_id == "second-page")
+    );
 }
 
 #[gpui::test]

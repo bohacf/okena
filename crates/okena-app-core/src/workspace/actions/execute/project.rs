@@ -54,6 +54,7 @@ pub(super) fn add_project(
     window_id: WindowId,
     name: String,
     path: String,
+    start_page: bool,
     backend: &dyn TerminalBackend,
     terminals: &TerminalsRegistry,
     settings: &AppSettings,
@@ -68,6 +69,9 @@ pub(super) fn add_project(
     // they just created without re-fetching state. `spawn_uninitialized_terminals`
     // returns `{ "terminal_ids": [...] }`; we merge `project_id` into that
     // object, leaving its terminal-spawning behavior unchanged.
+    if start_page {
+        ws.defer_first_terminal(&project_id, cx);
+    }
     match spawn_uninitialized_terminals(ws, &project_id, backend, terminals, settings, None, cx) {
         ActionResult::Ok(Some(serde_json::Value::Object(mut map))) => {
             map.insert(
@@ -97,6 +101,7 @@ pub(super) fn clone_project(
     parent_dir: String,
     directory: String,
     name: String,
+    start_page: bool,
     backend: &dyn TerminalBackend,
     terminals: &TerminalsRegistry,
     settings: &AppSettings,
@@ -116,6 +121,7 @@ pub(super) fn clone_project(
         window_id,
         name,
         target.to_string_lossy().into_owned(),
+        start_page,
         backend,
         terminals,
         settings,
@@ -487,6 +493,7 @@ pub(super) fn create_worktree(
     create_branch: bool,
     layout: Option<WorktreeLayout>,
     terminal_name: Option<String>,
+    start_page: bool,
     backend: &dyn TerminalBackend,
     terminals: &TerminalsRegistry,
     settings: &AppSettings,
@@ -517,6 +524,9 @@ pub(super) fn create_worktree(
         Ok(new_project_id) => {
             if layout == Some(WorktreeLayout::Single) {
                 ws.use_single_terminal_layout(&new_project_id);
+            }
+            if start_page && layout.is_none() && terminal_name.is_none() {
+                ws.defer_first_terminal(&new_project_id, cx);
             }
             let result = spawn_uninitialized_terminals(
                 ws,
@@ -550,8 +560,8 @@ pub(super) fn create_worktree(
 /// Register an already-on-disk git worktree as a tracked project under its
 /// parent. The worktree path is discovered client-side from a local git scan
 /// (same filesystem for a local daemon) and passed verbatim — the daemon
-/// creates the project, links it to the parent's worktree list, and spawns its
-/// terminal. Mirrors the old in-process `add_discovered_worktree` +
+/// creates the project, links it to the parent's worktree list, and initializes
+/// its first pane. Mirrors the old in-process `add_discovered_worktree` +
 /// `add_to_worktree_ids` GUI path.
 pub(super) fn add_discovered_worktree(
     ws: &mut Workspace,
@@ -559,6 +569,7 @@ pub(super) fn add_discovered_worktree(
     parent_project_id: String,
     worktree_path: String,
     branch: String,
+    start_page: bool,
     backend: &dyn TerminalBackend,
     terminals: &TerminalsRegistry,
     settings: &AppSettings,
@@ -575,6 +586,9 @@ pub(super) fn add_discovered_worktree(
     // Tracking it again is the user's answer to an earlier untrack.
     ws.undismiss_worktree(std::path::Path::new(&worktree_path));
     ws.add_to_worktree_ids(&parent_project_id, &new_id);
+    if start_page {
+        ws.defer_first_terminal(&new_id, cx);
+    }
     ws.notify_data(cx);
     let result = spawn_uninitialized_terminals(ws, &new_id, backend, terminals, settings, None, cx);
     let terminal_id = ws
@@ -1277,7 +1291,12 @@ mod hook_action_tests {
     }
 
     #[test]
-    fn adding_a_discovered_worktree_by_hand_forgets_its_dismissal() {
+    fn adding_a_discovered_worktree_honors_start_page_and_forgets_its_dismissal() {
+        verify_discovered_worktree(false);
+        verify_discovered_worktree(true);
+    }
+
+    fn verify_discovered_worktree(start_page: bool) {
         let (dir, worktree) = linked_worktree_fixture("track");
         let main = std::fs::canonicalize(dir.join("main")).unwrap();
         let mut data = workspace_with_hook("hook-1").data().clone();
@@ -1289,13 +1308,15 @@ mod hook_action_tests {
             monitor: HookMonitor::new(),
         };
 
+        let backend = RecordingBackend::default();
         let result = super::add_discovered_worktree(
             &mut workspace,
             crate::workspace::state::WindowId::Main,
             "p1".to_string(),
             worktree_path,
             "topic".to_string(),
-            &RecordingBackend::default(),
+            start_page,
+            &backend,
             &TerminalsRegistry::default(),
             &AppSettings::default(),
             &mut cx,
@@ -1305,7 +1326,14 @@ mod hook_action_tests {
             panic!("expected the new project in the reply");
         };
         let id = reply["project_id"].as_str().unwrap();
-        assert!(workspace.project(id).unwrap().layout.is_some());
+        let project = workspace.project(id).unwrap();
+        let layout = project.layout.as_ref().unwrap();
+        assert_eq!(layout.start_page().is_some(), start_page);
+        assert_eq!(reply["terminal_id"].is_null(), start_page);
+        assert_eq!(
+            backend.shells.lock().unwrap().len(),
+            usize::from(!start_page)
+        );
         assert!(
             workspace
                 .project("p1")
@@ -1459,6 +1487,7 @@ mod clone_project_tests {
             parent.to_string_lossy().into_owned(),
             "checkout".to_string(),
             "My Clone".to_string(),
+            false,
             &super::hook_action_tests::RecordingBackend::default(),
             &TerminalsRegistry::default(),
             &AppSettings::default(),
@@ -1501,6 +1530,7 @@ mod clone_project_tests {
             parent.to_string_lossy().into_owned(),
             "checkout".to_string(),
             "My Clone".to_string(),
+            false,
             &super::hook_action_tests::RecordingBackend::default(),
             &TerminalsRegistry::default(),
             &AppSettings::default(),
@@ -1523,6 +1553,7 @@ mod clone_project_tests {
             "/tmp".to_string(),
             "../escape".to_string(),
             "Escape".to_string(),
+            false,
             &super::hook_action_tests::RecordingBackend::default(),
             &TerminalsRegistry::default(),
             &AppSettings::default(),

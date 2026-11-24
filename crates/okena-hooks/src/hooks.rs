@@ -357,9 +357,16 @@ fn windows_encoded_hook_command(command: &str, env_vars: &HashMap<String, String
     ));
     script.push_str("& $env:ComSpec /D /S /C $okenaCommand;exit $LASTEXITCODE");
 
-    let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-    let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
+    let encoded = encode_powershell_script(&script);
     format!("powershell.exe -NoLogo -NoProfile -EncodedCommand {encoded}")
+}
+
+#[cfg(windows)]
+fn encode_powershell_script(script: &str) -> String {
+    use base64::Engine;
+
+    let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    base64::engine::general_purpose::STANDARD.encode(utf16)
 }
 
 fn safe_hook_environment(env_vars: &HashMap<String, String>) -> Vec<(String, String)> {
@@ -1680,6 +1687,108 @@ pub fn terminal_launch_plan(
     }
 }
 
+/// Run a Start Page command after the terminal hook and keep an interactive
+/// shell available when the command returns. The PTY never carries queued
+/// command input that could be consumed by the startup hook or shell profiles.
+pub fn start_page_launch_plan(
+    shell: ShellType,
+    shell_wrapper: Option<&str>,
+    on_create: Option<&str>,
+    command: &str,
+    env: &HashMap<String, String>,
+) -> TerminalLaunchPlan {
+    let (program, args, _handoff, separator, _) = terminal_launch_parts(&shell);
+    // Cmd uses a command sequence; POSIX shells and PowerShell can put the
+    // next command on its own line even if the preceding line has a comment.
+    let separator = if separator == " & " { separator } else { "\n" };
+    let with_hook = |body: &str| match on_create {
+        Some(hook) => format!("{hook}{separator}{body}"),
+        None => body.to_owned(),
+    };
+    let with_wrapper =
+        |nested: &str| with_hook(&wrap_start_page_shell(shell_wrapper, nested, separator));
+
+    #[cfg(windows)]
+    let (launch_body, mut args) = match &shell {
+        ShellType::PowerShell { .. } if shell_wrapper.is_none() => {
+            let mut args = args;
+            args.pop(); // Replace -Command with a lossless argv representation.
+            args.push("-EncodedCommand".to_string());
+            (encode_powershell_script(&with_hook(command)), args)
+        }
+        ShellType::PowerShell { .. } => {
+            let nested = format!(
+                "{_handoff} -EncodedCommand {}",
+                encode_powershell_script(command)
+            );
+            (with_wrapper(&nested), args)
+        }
+        ShellType::Default | ShellType::Cmd if shell_wrapper.is_none() => {
+            let mut args = args;
+            args.pop(); // Run the hook and command in the cmd.exe that stays open.
+            args.push("/K".to_string());
+            (with_hook(command), args)
+        }
+        ShellType::Default | ShellType::Cmd => {
+            let nested = format!("cmd.exe /D /S /K \"{command}\"");
+            (with_wrapper(&nested), args)
+        }
+        ShellType::Wsl { .. } => {
+            let nested = posix_start_page_shell("\"${SHELL:-sh}\"", command, &program);
+            (with_wrapper(&nested), args)
+        }
+        ShellType::Custom { .. } => {
+            let nested = posix_start_page_shell(&shell.to_command_string(), command, &program);
+            (with_wrapper(&nested), args)
+        }
+    };
+
+    #[cfg(not(windows))]
+    let (launch_body, mut args) = {
+        let shell_command = match &shell {
+            ShellType::Default => okena_core::shell::shell_quote(&program),
+            ShellType::Custom { .. } => shell.to_command_string(),
+        };
+        let nested = posix_start_page_shell(&shell_command, command, &program);
+        (with_wrapper(&nested), args)
+    };
+
+    args.push(launch_body);
+    TerminalLaunchPlan {
+        route: shell,
+        initial_command: Some(TerminalLaunchCommand { program, args }),
+        environment: safe_hook_environment(env),
+        project_id: None,
+    }
+}
+
+fn wrap_start_page_shell(wrapper: Option<&str>, shell: &str, separator: &str) -> String {
+    match wrapper {
+        Some(wrapper) if wrapper.contains("{shell}") => wrapper.replace("{shell}", shell),
+        Some(wrapper) => format!("{wrapper}{separator}{shell}"),
+        None => shell.to_owned(),
+    }
+}
+
+fn posix_start_page_shell(shell: &str, command: &str, outer_program: &str) -> String {
+    use okena_core::shell::shell_quote;
+
+    // Run in an interactive instance so the normal startup files define aliases.
+    // Use a separate POSIX driver to hand off even if the command's shell exits
+    // with a syntax error. Keeping both invocations inside the wrapper preserves
+    // the wrapper's working directory and environment after the command exits.
+    let script = format!("{shell} -ic {}\nexec {shell}", shell_quote(command));
+    let argument = if std::path::Path::new(outer_program)
+        .file_stem()
+        .is_some_and(|name| name == "fish")
+    {
+        format!("'{}'", script.replace('\\', "\\\\").replace('\'', "\\'"))
+    } else {
+        shell_quote(&script)
+    };
+    format!("sh -c {argument}")
+}
+
 fn terminal_launch_parts(shell: &ShellType) -> (String, Vec<String>, String, &'static str, bool) {
     #[cfg(windows)]
     match shell {
@@ -2568,6 +2677,134 @@ mod tests {
         assert!(!script.contains(hostile));
         assert!(script.contains(&base64::engine::general_purpose::STANDARD.encode(hostile)));
         assert!(script.contains(&base64::engine::general_purpose::STANDARD.encode("echo ready")));
+    }
+
+    #[test]
+    fn start_page_interactive_shell_runs_inside_wrapper_after_hook() {
+        use okena_core::shell::shell_quote;
+
+        let shell = ShellType::Custom {
+            path: "/bin/bash".into(),
+            args: vec!["-l".into()],
+        };
+        let env = HashMap::from([("OKENA_PROJECT_ID".to_string(), "project".to_string())]);
+        let raw = r#"alias_cmd "two words" 'single' "$HOME""#;
+        let plan = start_page_launch_plan(
+            shell.clone(),
+            Some("envbox -- {shell}"),
+            Some("prepare_project # startup"),
+            raw,
+            &env,
+        );
+
+        assert_eq!(plan.route, shell);
+        assert_eq!(
+            plan.environment,
+            vec![("OKENA_PROJECT_ID".into(), "project".into())]
+        );
+        let launch = plan.initial_command.unwrap();
+        assert_eq!(launch.program, "/bin/bash");
+        let driver = format!("/bin/bash -l -ic {}\nexec /bin/bash -l", shell_quote(raw),);
+        assert_eq!(
+            launch.args,
+            vec![
+                "-l".to_string(),
+                "-ic".to_string(),
+                format!(
+                    "prepare_project # startup\nenvbox -- sh -c {}",
+                    shell_quote(&driver)
+                ),
+            ],
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn start_page_wsl_runs_command_in_distros_interactive_shell() {
+        use okena_core::shell::shell_quote;
+
+        let shell = ShellType::Wsl {
+            distro: Some("Ubuntu".into()),
+        };
+        let raw = r#"alias_cmd "two words" 'single' "$HOME""#;
+        let plan = start_page_launch_plan(
+            shell.clone(),
+            None,
+            Some("prepare_project"),
+            raw,
+            &HashMap::new(),
+        );
+
+        assert_eq!(plan.route, shell);
+        let launch = plan.initial_command.unwrap();
+        assert_eq!(launch.program, "sh");
+        let selected_shell = r#""${SHELL:-sh}""#;
+        let driver = format!(
+            "{selected_shell} -ic {}\nexec {selected_shell}",
+            shell_quote(raw)
+        );
+        assert_eq!(
+            launch.args,
+            vec![
+                "-lc".to_string(),
+                format!("prepare_project\nsh -c {}", shell_quote(&driver)),
+            ],
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn start_page_powershell_keeps_quoted_hook_and_command_in_one_no_exit_shell() {
+        let shell = ShellType::PowerShell { core: true };
+        let raw = r#"my_alias "Příkaz s mezerami" 'apostrophe' $env:VALUE"#;
+        let hook = "Set-Alias my_alias Write-Host";
+        let plan = start_page_launch_plan(shell.clone(), None, Some(hook), raw, &HashMap::new());
+
+        assert_eq!(plan.route, shell);
+        let launch = plan.initial_command.unwrap();
+        assert_eq!(launch.program, "pwsh.exe");
+        assert_eq!(&launch.args[..3], ["-NoLogo", "-NoExit", "-EncodedCommand"]);
+        assert_eq!(
+            decode_powershell_script(&launch.args[3]),
+            format!("{hook}\n{raw}")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn start_page_powershell_runs_command_inside_explicit_wrapper() {
+        let raw = r#"alias_cmd "two words" 'single'"#;
+        let plan = start_page_launch_plan(
+            ShellType::PowerShell { core: false },
+            Some("envbox -- {shell}"),
+            Some("Prepare-Project"),
+            raw,
+            &HashMap::new(),
+        );
+
+        let launch = plan.initial_command.unwrap();
+        assert_eq!(launch.program, "powershell.exe");
+        assert_eq!(&launch.args[..3], ["-NoLogo", "-NoExit", "-Command"]);
+        let encoded = launch.args[3]
+            .strip_prefix(
+                "Prepare-Project\nenvbox -- powershell.exe -NoLogo -NoExit -EncodedCommand ",
+            )
+            .unwrap();
+        assert_eq!(decode_powershell_script(encoded), raw);
+    }
+
+    #[cfg(windows)]
+    fn decode_powershell_script(encoded: &str) -> String {
+        use base64::Engine;
+
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        let utf16: Vec<_> = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        String::from_utf16(&utf16).unwrap()
     }
 
     #[cfg(windows)]
