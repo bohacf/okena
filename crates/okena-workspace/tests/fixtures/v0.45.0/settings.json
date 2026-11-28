@@ -1,0 +1,134 @@
+{
+  "version": 3,
+  "theme_mode": "dark",
+  "active_session": null,
+  "sidebar": {
+    "is_open": false,
+    "auto_hide": false,
+    "width": 250.0,
+    "remote_layout": "mixed",
+    "host_stats": "off",
+    "worktree_marker": "project",
+    "worktree_guide": false,
+    "worktree_attention": false,
+    "show_agents": true
+  },
+  "status_board": {
+    "enabled": false,
+    "columns": [
+      {
+        "id": "todo",
+        "name": "To do",
+        "color": "default"
+      },
+      {
+        "id": "in-progress",
+        "name": "In progress",
+        "color": "default"
+      },
+      {
+        "id": "review",
+        "name": "Review",
+        "color": "default"
+      },
+      {
+        "id": "done",
+        "name": "Done",
+        "color": "default"
+      }
+    ]
+  },
+  "show_focused_border": false,
+  "show_whats_new_after_update": true,
+  "color_tinted_background": false,
+  "font_size": 15.0,
+  "font_family": "Fira Code",
+  "line_height": 1.3,
+  "ui_font_size": 13.0,
+  "ui_font_family": ".SystemUIFont",
+  "file_font_size": 12.0,
+  "file_font_family": "JetBrains Mono",
+  "file_line_height": 1.8,
+  "cursor_style": "Block",
+  "cursor_blink": false,
+  "scrollback_lines": 10000,
+  "terminal_close_grace_secs": 5,
+  "default_shell": {
+    "type": "Default"
+  },
+  "show_start_page": false,
+  "start_page_buttons": [],
+  "show_shell_selector": false,
+  "auto_hide_single_terminal_header": true,
+  "show_terminal_name_when_inactive": false,
+  "show_active_terminal_title": false,
+  "session_backend": "Tmux",
+  "pane_memory": {
+    "enabled": true,
+    "memory_high": "12G",
+    "memory_max": "16G",
+    "memory_swap_max": "4G"
+  },
+  "auto_resume_agent_sessions": true,
+  "claude_remote": false,
+  "claude_remote_channel": true,
+  "ai_proxy_enabled": false,
+  "file_opener": "",
+  "close_file_viewer_on_open_externally": false,
+  "hooks": {
+    "project": {
+      "on_open": "echo opened"
+    }
+  },
+  "diff_view_mode": "Unified",
+  "remote_server_enabled": false,
+  "remote_listen_address": "127.0.0.1",
+  "remote_tls_enabled": true,
+  "min_column_width": 400.0,
+  "min_tile_width": 600.0,
+  "min_tile_height": 300.0,
+  "diff_ignore_whitespace": false,
+  "blame_visible": false,
+  "detached_overlays_by_default": false,
+  "cap_unfocused_window_fps": false,
+  "hide_projects_without_terminals": true,
+  "detached_overlay_bounds": null,
+  "enabled_extensions": [
+    "claude-code"
+  ],
+  "idle_timeout_secs": 600,
+  "worktree": {
+    "path_template": "../{repo}-wt/{branch}",
+    "default_merge": false,
+    "default_stash": false,
+    "default_fetch": true,
+    "default_push": false,
+    "default_delete_branch": false,
+    "auto_track": false,
+    "auto_track_ignore": [
+      ".claude/worktrees/agent-*"
+    ],
+    "show_hidden_when_focused": false
+  },
+  "remote_connections": [],
+  "terminal_ctrl_c_copies_selection": false,
+  "terminal_right_click_opens_menu": true,
+  "terminal_drag_selects_in_mouse_mode": false,
+  "terminal_double_click_selects_in_mouse_mode": false,
+  "terminal_option_as_meta": false,
+  "file_finder": {
+    "show_ignored": false
+  },
+  "header_density": "compact",
+  "status_bar": {
+    "style": "detailed",
+    "metrics_graph": true,
+    "show_metrics": true
+  },
+  "notifications": {
+    "enabled": false,
+    "osc": true,
+    "bell": true
+  },
+  "allow_clipboard_read": false
+}

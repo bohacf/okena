@@ -1746,6 +1746,30 @@ mod tests {
         assert!(loaded.expand_terminal_list_on_open);
     }
 
+    // Written by the v0.45.0 encoder from a file with user-changed values.
+    const V0_45_SETTINGS: &str = include_str!("../tests/fixtures/v0.45.0/settings.json");
+
+    #[test]
+    fn v0_45_settings_load_unchanged_with_new_settings_off() {
+        // Same parse and migration as the clean branch of `load_settings`.
+        let loaded = migrate_settings(serde_json::from_str::<AppSettings>(V0_45_SETTINGS).unwrap());
+        assert!(!loaded.expand_terminal_list_on_open);
+
+        let fixture: serde_json::Value = serde_json::from_str(V0_45_SETTINGS).unwrap();
+        // A changed version would make `load_settings` rewrite the file.
+        assert_eq!(loaded.version, fixture["version"]);
+
+        // Re-saving keeps every v0.45.0 key and value; keys added since then
+        // appear with their defaults.
+        let mut expected = fixture.as_object().unwrap().clone();
+        expected.insert("diff_wrap_lines".into(), false.into());
+        expected.insert("expand_terminal_list_on_open".into(), false.into());
+        // Same encoder as `write_settings_locked`.
+        let saved: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string_pretty(&loaded).unwrap()).unwrap();
+        assert_eq!(saved, serde_json::Value::Object(expected));
+    }
+
     #[test]
     fn single_terminal_header_auto_hide_is_opt_in() {
         let defaults = AppSettings::default();
