@@ -53,6 +53,14 @@ fn canonicalize_layout_action(action: ActionRequest, mode: ProjectLayoutMode) ->
     }
 }
 
+fn confirmed_terminal_id(response: &serde_json::Value) -> Option<&str> {
+    response
+        .get("terminal_ids")?
+        .get(0)?
+        .as_str()
+        .filter(|id| !id.is_empty())
+}
+
 fn discovered_worktree_project_name(worktree_path: &str, branch: &str) -> String {
     let directory_name = std::path::Path::new(worktree_path)
         .file_name()
@@ -181,6 +189,10 @@ impl ActionDispatcher {
                 );
                 return;
             }
+            let reveal_terminals = crate::settings::settings_entity(cx)
+                .read(cx)
+                .settings
+                .expand_terminal_list_on_open;
             let result = manager.send_action_with_result(&connection_id, action, cx);
             cx.spawn(async move |_, cx| {
                 // Request failures already reach the user as a connection warning.
@@ -191,17 +203,16 @@ impl ActionDispatcher {
                         return;
                     }
                 };
-                let Some(terminal_id) = value
-                    .get("terminal_ids")
-                    .and_then(|ids| ids.get(0))
-                    .and_then(serde_json::Value::as_str)
-                else {
+                let Some(terminal_id) = confirmed_terminal_id(&value) else {
                     log::error!("Command tab action returned no terminal ID");
                     return;
                 };
                 let terminal_id = make_prefixed_id(&connection_id, terminal_id);
                 let _ = focus_manager.update(cx, |fm, cx| {
                     let _ = workspace.update(cx, |ws, cx| {
+                        if reveal_terminals {
+                            ws.expand_terminal_list(window_id, &project_id, cx);
+                        }
                         ws.request_terminal_focus(fm, window_id, project_id, terminal_id, cx);
                     });
                     cx.notify();
@@ -263,6 +274,7 @@ impl ActionDispatcher {
         } = self;
         let mode = workspace.read_with(cx, |ws, _cx| ws.project_layout_mode(*window_id));
         let action = canonicalize_layout_action(action, mode);
+        let mut opening_project = None;
 
         // Visual/presentation actions are executed locally on the client
         // workspace. They never reach the server, so each client has
@@ -389,19 +401,13 @@ impl ActionDispatcher {
                 return;
             }
             ActionRequest::CreateTerminal { project_id, .. }
-            | ActionRequest::LaunchStartPage { project_id, .. } => {
-                // Record pending focus — the actual focus will happen when
-                // the next state sync brings the new terminal into the
-                // client's layout (see sync_remote_projects_into_workspace).
-                Self::queue_focus_for_next_remote_terminal(workspace, *window_id, project_id, cx);
-                // Don't return — action proceeds to be sent to server below
-            }
-            ActionRequest::SplitTerminal { project_id, .. }
+            | ActionRequest::LaunchStartPage { project_id, .. }
+            | ActionRequest::SplitTerminal { project_id, .. }
             | ActionRequest::AddTab { project_id, .. } => {
-                // Split/tab creation also happens on the daemon now. Defer
-                // terminal focus until the synced layout contains the new PTY.
+                // Focus waits for the mirrored pane. The reveal waits for the
+                // result of this particular action, independent of snapshots.
                 Self::queue_focus_for_next_remote_terminal(workspace, *window_id, project_id, cx);
-                // Don't return — action proceeds to be sent to server below
+                opening_project = Some(project_id.clone());
             }
             ActionRequest::CreateWorktree { branch, .. } => {
                 // Record pending project visibility — the server assigns
@@ -450,7 +456,28 @@ impl ActionDispatcher {
                         .show_start_page,
                 );
             }
-            rm.send_action(&cid, action, cx);
+            if let Some(project_id) = opening_project
+                && crate::settings::settings_entity(cx)
+                    .read(cx)
+                    .settings
+                    .expand_terminal_list_on_open
+            {
+                let result = rm.send_user_action_with_result(&cid, action, cx);
+                let workspace = workspace.downgrade();
+                let window_id = *window_id;
+                cx.spawn(async move |_, cx| match result.await {
+                    Ok(value) if confirmed_terminal_id(&value).is_some() => {
+                        let _ = workspace.update(cx, |ws, cx| {
+                            ws.expand_terminal_list(window_id, &project_id, cx);
+                        });
+                    }
+                    Err(error) => log::warn!("Terminal launch failed: {error}"),
+                    Ok(_) => {}
+                })
+                .detach();
+            } else {
+                rm.send_action(&cid, action, cx);
+            }
         });
     }
 
@@ -1533,6 +1560,24 @@ fn strip_remote_ids(action: ActionRequest, connection_id: &str) -> ActionRequest
 mod tests {
     use super::*;
     use crate::workspace::state::SplitDirection;
+
+    #[test]
+    fn reveal_requires_a_terminal_id_from_the_action_response() {
+        use serde_json::json;
+
+        assert_eq!(
+            confirmed_terminal_id(&json!({"terminal_ids": ["new-id"]})),
+            Some("new-id")
+        );
+        for response in [
+            json!({"ok": true}),
+            json!({"terminal_ids": []}),
+            json!({"terminal_ids": [""]}),
+            json!({"terminal_ids": [null]}),
+        ] {
+            assert_eq!(confirmed_terminal_id(&response), None);
+        }
+    }
 
     #[test]
     fn export_stems_are_distinct_per_terminal_and_connection() {

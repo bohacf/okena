@@ -75,6 +75,14 @@ impl SettingsPanel {
                     |state, val, cx| state.set_auto_resume_agent_sessions(val, cx),
                     cx,
                 ))
+                .child(self.render_toggle(
+                    "expand-terminal-list-on-open",
+                    "Expand Terminal List When Opening a New Terminal",
+                    s.expand_terminal_list_on_open,
+                    true,
+                    |state, val, cx| state.set_expand_terminal_list_on_open(val, cx),
+                    cx,
+                ))
                 // Hidden where the daemon cannot apply it: the preload is Unix only.
                 .when(cfg!(unix), |el| {
                     el.child(Self::render_toggle_with_desc(

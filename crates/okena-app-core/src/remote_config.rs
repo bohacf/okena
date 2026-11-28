@@ -549,6 +549,7 @@ mod tests {
                 assert!(obj.contains_key("font_size"));
                 assert!(obj.contains_key("theme_mode"));
                 assert!(obj.contains_key("font_family"));
+                assert_eq!(obj.get("expand_terminal_list_on_open"), Some(&json!(false)));
                 // The schema deserializes back into AppSettings (it IS the
                 // defaults instance).
                 serde_json::from_value::<AppSettings>(v).expect("schema round-trips");
@@ -664,6 +665,22 @@ mod tests {
             settings_delta(&shared(&previous), &shared(&next)),
             json!({ "font_size": 19.0 })
         );
+    }
+
+    #[test]
+    fn terminal_list_auto_expansion_can_be_enabled_and_disabled_via_settings_patch() {
+        let defaults = AppSettings::default();
+        let mut requested = defaults.clone();
+        requested.expand_terminal_list_on_open = true;
+        let enable = settings_delta(&shared(&defaults), &shared(&requested));
+        assert_eq!(enable, json!({"expand_terminal_list_on_open": true}));
+        let enabled = preview_settings_patch(&defaults, enable).unwrap();
+        assert!(enabled.expand_terminal_list_on_open);
+
+        let disable = settings_delta(&shared(&enabled), &shared(&defaults));
+        assert_eq!(disable, json!({"expand_terminal_list_on_open": false}));
+        let disabled = preview_settings_patch(&enabled, disable).unwrap();
+        assert!(!disabled.expand_terminal_list_on_open);
     }
 
     #[test]

@@ -1454,6 +1454,47 @@ impl Workspace {
         }
     }
 
+    /// Reveal a project's terminal list in one window after a confirmed launch.
+    pub fn expand_terminal_list(
+        &mut self,
+        window_id: WindowId,
+        project_id: &str,
+        cx: &mut impl WorkspaceCx,
+    ) {
+        let (Some(window), Some(project)) = (self.data.window(window_id), self.project(project_id))
+        else {
+            return;
+        };
+        // Activity order renders projects as peers, without folder or worktree ancestors.
+        let (family_id, folder_id) = if window.project_sort_mode.is_activity() {
+            (None, None)
+        } else {
+            let parent_id = project
+                .worktree_info
+                .as_ref()
+                .map(|info| info.parent_project_id.as_str())
+                .filter(|id| self.project(id).is_some());
+            let family_id =
+                parent_id.or_else(|| (!project.worktree_ids.is_empty()).then_some(project_id));
+            let folder_id = self
+                .folder_for_project(parent_id.unwrap_or(project_id))
+                .map(|folder| folder.id.clone());
+            (family_id.map(str::to_owned), folder_id)
+        };
+
+        let Some(window) = self.data.window_mut(window_id) else {
+            return;
+        };
+        let list_changed = window.sidebar_tree.expand_terminal_list(project_id);
+        let family_changed =
+            family_id.is_some_and(|id| window.sidebar_tree.collapsed_worktrees.remove(&id));
+        let folder_changed =
+            folder_id.is_some_and(|id| window.folder_collapsed.remove(&id).is_some());
+        if list_changed || family_changed || folder_changed {
+            self.notify_data(cx);
+        }
+    }
+
     /// Set a folder's collapsed state on the targeted window.
     ///
     /// Delegates to `data.set_folder_collapsed`, which inserts
@@ -6513,6 +6554,68 @@ mod gpui_tests {
             assert!(ws.data().main_window.project_widths.is_empty());
             let kept = ws.data().window(WindowId::Extra(extra_id)).unwrap();
             assert!(kept.project_widths.is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn expand_terminal_list_reveals_only_the_target_windows_rendered_branch(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let mut data: WorkspaceData = serde_json::from_value(serde_json::json!({
+            "projects": [
+                {"id":"parent", "name":"parent", "path":"/parent", "worktree_ids":["child"]},
+                {"id":"child", "name":"child", "path":"/child", "worktree_info":{"parent_project_id":"parent"}},
+            ],
+            "project_order": ["folder"],
+            "folders": [{"id":"folder", "name":"folder", "project_ids":["parent"]}],
+        }))
+        .unwrap();
+        data.main_window.project_sort_mode = okena_state::ProjectSortMode::Activity;
+        data.main_window
+            .folder_collapsed
+            .insert("folder".into(), true);
+        data.main_window
+            .sidebar_tree
+            .collapsed_worktrees
+            .insert("parent".into());
+        data.main_window
+            .sidebar_tree
+            .collapsed_terminals
+            .insert("child".into());
+
+        let extra = WindowState {
+            sidebar_tree: data.main_window.sidebar_tree.clone(),
+            folder_collapsed: data.main_window.folder_collapsed.clone(),
+            ..WindowState::default()
+        };
+        let extra_id = WindowId::Extra(extra.id);
+        data.extra_windows.push(extra);
+
+        let workspace = cx.update(|cx| cx.new(|_| Workspace::new(data)));
+        workspace.update(cx, |ws, cx| {
+            let version = ws.data_version();
+            ws.expand_terminal_list(extra_id, "child", cx);
+            assert_eq!(ws.data_version(), version + 1);
+            let extra = ws.data().window(extra_id).unwrap();
+            assert!(extra.sidebar_tree.expanded_projects.contains("child"));
+            assert!(!extra.sidebar_tree.expanded_projects.contains("parent"));
+            assert!(!extra.sidebar_tree.collapsed_terminals.contains("child"));
+            assert!(!extra.sidebar_tree.collapsed_worktrees.contains("parent"));
+            assert!(!extra.folder_collapsed.contains_key("folder"));
+
+            let main = &ws.data().main_window;
+            assert!(!main.sidebar_tree.expanded_projects.contains("child"));
+            assert!(main.sidebar_tree.collapsed_terminals.contains("child"));
+            ws.expand_terminal_list(extra_id, "child", cx);
+            ws.expand_terminal_list(extra_id, "missing", cx);
+            assert_eq!(ws.data_version(), version + 1);
+
+            ws.expand_terminal_list(WindowId::Main, "child", cx);
+            let main = &ws.data().main_window;
+            assert!(main.sidebar_tree.expanded_projects.contains("child"));
+            assert!(!main.sidebar_tree.collapsed_terminals.contains("child"));
+            assert!(main.sidebar_tree.collapsed_worktrees.contains("parent"));
+            assert!(main.folder_collapsed.contains_key("folder"));
         });
     }
 

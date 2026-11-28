@@ -678,6 +678,9 @@ pub struct AppSettings {
     /// session whose agent is (still) running, so nothing is resumed.
     #[serde(default)]
     pub auto_resume_agent_sessions: bool,
+    /// Reveal a newly opened desktop terminal in its window's sidebar.
+    #[serde(default)]
+    pub expand_terminal_list_on_open: bool,
     /// Claude remote: let other clients (phone, web) follow and steer `claude`
     /// sessions in panes. When on, new panes get a `BUN_OPTIONS` preload that
     /// adds Okena's hooks (and the MCP channel, see `claude_remote_channel`)
@@ -908,6 +911,7 @@ impl Default for AppSettings {
             session_backend: SessionBackend::default(),
             pane_memory: PaneMemoryLimits::default(),
             auto_resume_agent_sessions: false,
+            expand_terminal_list_on_open: false,
             claude_remote: false,
             claude_remote_channel: true,
             ai_proxy_enabled: false,
@@ -1721,6 +1725,25 @@ mod tests {
         assert_eq!(recovered.font_size, 18.0);
         assert_eq!(recovered.file_line_height, 1.4);
         assert_eq!(recovered.scrollback_lines, 12000);
+    }
+
+    #[test]
+    fn expanding_terminal_lists_is_opt_in() {
+        let previous: AppSettings =
+            serde_json::from_str(r#"{"auto_resume_agent_sessions": true}"#).unwrap();
+        assert!(!previous.expand_terminal_list_on_open);
+        assert!(previous.auto_resume_agent_sessions);
+        assert_eq!(
+            serde_json::to_value(&previous).unwrap()["expand_terminal_list_on_open"],
+            false
+        );
+
+        let enabled: AppSettings =
+            serde_json::from_str(r#"{"expand_terminal_list_on_open": true}"#).unwrap();
+        let saved = serde_json::to_value(&enabled).unwrap();
+        assert_eq!(saved["expand_terminal_list_on_open"], true);
+        let loaded: AppSettings = serde_json::from_value(saved).unwrap();
+        assert!(loaded.expand_terminal_list_on_open);
     }
 
     #[test]

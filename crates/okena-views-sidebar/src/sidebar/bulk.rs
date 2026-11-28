@@ -113,9 +113,10 @@ impl Sidebar {
                 self.window_id,
                 |tree| {
                     for id in targets {
-                        tree.set_project_expanded(&id, expanded);
                         if expanded {
-                            tree.collapsed_terminals.remove(&id);
+                            tree.expand_terminal_list(&id);
+                        } else {
+                            tree.set_project_expanded(&id, false);
                         }
                     }
                     if expanded {

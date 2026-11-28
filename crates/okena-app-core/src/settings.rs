@@ -247,6 +247,13 @@ impl SettingsState {
         auto_resume_agent_sessions,
         bool
     );
+    pub fn set_expand_terminal_list_on_open(&mut self, value: bool, cx: &mut Context<Self>) {
+        if self.settings.expand_terminal_list_on_open != value {
+            self.settings.expand_terminal_list_on_open = value;
+            self.save_and_notify(cx);
+        }
+    }
+
     setting_setter!(set_claude_remote, claude_remote, bool);
     setting_setter!(set_claude_remote_channel, claude_remote_channel, bool);
     setting_setter!(set_ai_proxy_enabled, ai_proxy_enabled, bool);

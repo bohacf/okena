@@ -873,6 +873,26 @@ impl RemoteConnectionManager {
         action: ActionRequest,
         cx: &mut Context<Self>,
     ) -> gpui::Task<Result<serde_json::Value, String>> {
+        self.send_action_returning_result(connection_id, action, false, cx)
+    }
+
+    /// Return a desktop action's result while retaining the usual action error toasts.
+    pub fn send_user_action_with_result(
+        &self,
+        connection_id: &str,
+        action: ActionRequest,
+        cx: &mut Context<Self>,
+    ) -> gpui::Task<Result<serde_json::Value, String>> {
+        self.send_action_returning_result(connection_id, action, true, cx)
+    }
+
+    fn send_action_returning_result(
+        &self,
+        connection_id: &str,
+        action: ActionRequest,
+        show_preflight_errors: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Task<Result<serde_json::Value, String>> {
         let Some(connection) = self.connections.get(connection_id) else {
             return Task::ready(Err(format!("Connection {connection_id} not found")));
         };
@@ -882,11 +902,21 @@ impl RemoteConnectionManager {
             self.supports_command_tabs(connection_id),
         ) {
             Ok(action) => action,
-            Err(error) => return Task::ready(Err(error.to_string())),
+            Err(error) => {
+                let message = error.to_string();
+                if show_preflight_errors {
+                    ToastManager::error(message.clone(), cx);
+                }
+                return Task::ready(Err(message));
+            }
         };
         let config = connection.config().clone();
         let Some(token) = config.effective_auth_token() else {
-            return Task::ready(Err("No auth token for remote connection".to_string()));
+            let message = "No auth token for remote connection".to_string();
+            if show_preflight_errors {
+                ToastManager::error(message.clone(), cx);
+            }
+            return Task::ready(Err(message));
         };
         let (result_tx, result_rx) = async_channel::bounded(1);
         let queue = self.action_queues.enqueue(

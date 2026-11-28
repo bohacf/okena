@@ -489,7 +489,9 @@ impl Sidebar {
         self.workspace.update(cx, |ws, cx| {
             ws.update_sidebar_tree(
                 self.window_id,
-                |tree| tree.set_project_expanded(project_id, expanded),
+                |tree| {
+                    tree.set_project_expanded(project_id, expanded);
+                },
                 cx,
             );
         });

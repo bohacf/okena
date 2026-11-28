@@ -70,12 +70,18 @@ impl SidebarTreeState {
             && self.collapsed_terminals.is_empty()
     }
 
-    pub fn set_project_expanded(&mut self, project_id: &str, expanded: bool) {
+    pub fn set_project_expanded(&mut self, project_id: &str, expanded: bool) -> bool {
         if expanded {
-            self.expanded_projects.insert(project_id.to_owned());
+            self.expanded_projects.insert(project_id.to_owned())
         } else {
-            self.expanded_projects.remove(project_id);
+            self.expanded_projects.remove(project_id)
         }
+    }
+
+    pub fn expand_terminal_list(&mut self, project_id: &str) -> bool {
+        let project_changed = self.set_project_expanded(project_id, true);
+        let terminals_changed = self.collapsed_terminals.remove(project_id);
+        project_changed || terminals_changed
     }
 
     fn project_sets_mut(&mut self) -> [&mut HashSet<String>; 3] {
