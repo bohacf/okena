@@ -1361,7 +1361,7 @@ pub fn default_workspace() -> WorkspaceData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{FolderData, SplitDirection};
+    use crate::state::{FolderData, SidebarTreeState, SplitDirection};
 
     fn test_lock_path() -> PathBuf {
         std::env::temp_dir().join(format!("okena-lock-test-{}", uuid::Uuid::new_v4()))
@@ -1760,6 +1760,50 @@ mod tests {
             loaded.hook_panel_heights.get("remote:local-daemon:p1"),
             Some(&180.0)
         );
+    }
+
+    // Written by the v0.45.0 encoders. A failing comparison means the on-disk
+    // format changed: confirm the change is intended before regenerating.
+    const V0_45_WINDOW_LAYOUT: &str = include_str!("../tests/fixtures/v0.45.0/window-layout.json");
+    const V0_45_WORKSPACE: &str = include_str!("../tests/fixtures/v0.45.0/workspace.json");
+
+    fn assert_same_json(saved: &str, fixture: &str) {
+        let saved: serde_json::Value = serde_json::from_str(saved).unwrap();
+        let fixture: serde_json::Value = serde_json::from_str(fixture).unwrap();
+        assert_eq!(saved, fixture);
+    }
+
+    #[test]
+    fn v0_45_window_layout_loads_and_saves_unchanged() {
+        let path = test_window_layout_path();
+        std::fs::write(&path, V0_45_WINDOW_LAYOUT).unwrap();
+
+        let loaded = load_window_layout_at(&path, || {
+            panic!("legacy workspace must not be loaded when the client file exists")
+        })
+        .unwrap();
+
+        let _ = std::fs::remove_file(path);
+        // An empty tree is the sidebar default: projects collapsed, worktree
+        // and Terminals groups expanded.
+        for window in std::iter::once(&loaded.main_window).chain(&loaded.extra_windows) {
+            assert_eq!(window.sidebar_tree, SidebarTreeState::default());
+        }
+        assert_same_json(
+            &serde_json::to_string_pretty(&loaded).unwrap(),
+            V0_45_WINDOW_LAYOUT,
+        );
+    }
+
+    #[test]
+    fn v0_45_workspace_loads_and_saves_unchanged() {
+        let content = migrate_legacy_json(V0_45_WORKSPACE).unwrap();
+        let loaded = migrate_workspace(serde_json::from_str(&content).unwrap());
+
+        for window in std::iter::once(&loaded.main_window).chain(&loaded.extra_windows) {
+            assert_eq!(window.sidebar_tree, SidebarTreeState::default());
+        }
+        assert_same_json(&encode_workspace(&loaded).unwrap(), V0_45_WORKSPACE);
     }
 
     #[test]
