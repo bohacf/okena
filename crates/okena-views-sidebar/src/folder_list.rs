@@ -230,7 +230,7 @@ impl Sidebar {
     ) -> impl IntoElement {
         let t = theme(cx);
         let has_worktrees = project.worktree_count > 0;
-        let is_expanded = self.expanded_projects.contains(&project.id);
+        let is_expanded = self.is_project_expanded(&project.id, cx);
         let project_id = project.id.clone();
         let project_name = project.name.clone();
         let folder_id = folder_id.to_string();
@@ -356,7 +356,7 @@ impl Sidebar {
                     .on_click(cx.listener({
                         let project_id = project_id.clone();
                         move |this, _, _window, cx| {
-                            this.toggle_expanded(&project_id);
+                            this.toggle_expanded(&project_id, cx);
                             cx.notify();
                             cx.stop_propagation();
                         }

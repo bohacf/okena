@@ -450,7 +450,7 @@ impl RemoteSyncState {
     }
 }
 
-fn remote_connection_id(project_id: &str) -> Option<&str> {
+pub(crate) fn remote_connection_id(project_id: &str) -> Option<&str> {
     project_id.strip_prefix("remote:")?.split(':').next()
 }
 

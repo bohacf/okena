@@ -807,6 +807,9 @@ fn prefix_local_daemon_terminal_ids(layout: &mut LayoutNode) {
 }
 
 fn prefix_local_daemon_window_state_refs(window: &mut WindowState) {
+    window
+        .sidebar_tree
+        .remap_project_ids(prefix_local_daemon_id);
     window.hidden_project_ids = window
         .hidden_project_ids
         .drain()
@@ -1537,6 +1540,11 @@ mod tests {
         main.project_widths.insert("p2".to_string(), 0.4);
         main.folder_filter = Some("f1".to_string());
         main.folder_collapsed.insert("f2".to_string(), true);
+        main.sidebar_tree.set_project_expanded("p1", true);
+        main.sidebar_tree.collapsed_worktrees.insert("p2".into());
+        main.sidebar_tree
+            .collapsed_terminals
+            .insert("remote:server:p3".into());
         main.hidden_project_ids
             .insert("remote:server:p3".to_string());
         let mut layout = ClientWindowLayout {
@@ -1593,6 +1601,19 @@ mod tests {
                 .get("remote:local-daemon:f2")
                 .copied(),
             Some(true),
+        );
+        let tree = &layout.main_window.sidebar_tree;
+        assert_eq!(
+            tree.expanded_projects,
+            std::collections::HashSet::from(["remote:local-daemon:p1".into()])
+        );
+        assert_eq!(
+            tree.collapsed_worktrees,
+            std::collections::HashSet::from(["remote:local-daemon:p2".into()])
+        );
+        assert_eq!(
+            tree.collapsed_terminals,
+            std::collections::HashSet::from(["remote:server:p3".into()])
         );
         let restored = layout
             .project_layouts

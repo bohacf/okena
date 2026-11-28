@@ -819,7 +819,7 @@ impl Okena {
             let last_saved_version = Arc::new(AtomicU64::new(0));
             let workspace_for_save = workspace.clone();
             let window_layout_saves = window_layout_saves.clone();
-            cx.observe(&workspace, move |_this, ws_entity, cx| {
+            cx.observe(&workspace, move |this, ws_entity, cx| {
                 let current_version = ws_entity.read(cx).data_version();
                 if current_version == last_saved_version.load(Ordering::Relaxed) {
                     return;
@@ -830,9 +830,13 @@ impl Okena {
                 let last_saved = last_saved_version.clone();
                 let workspace = workspace_for_save.clone();
                 let window_layout_saves = window_layout_saves.clone();
+                let quitting = this.quitting.clone();
                 cx.spawn(async move |_, cx| {
                     smol::Timer::after(Duration::from_millis(500)).await;
-                    if save_pending.swap(false, Ordering::Relaxed) {
+                    // Quit already captured the layout before disconnecting the daemon.
+                    if !quitting.load(Ordering::SeqCst)
+                        && save_pending.swap(false, Ordering::Relaxed)
+                    {
                         let (data, project_layouts, version) = cx.update(|cx| {
                             let ws = workspace.read(cx);
                             (

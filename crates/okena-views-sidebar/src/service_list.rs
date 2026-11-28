@@ -96,7 +96,7 @@ impl Sidebar {
         .on_click(cx.listener({
             let project_id = project_id.clone();
             move |this, _, _window, cx| {
-                this.toggle_group(&project_id, GroupKind::Services);
+                this.toggle_group(&project_id, GroupKind::Services, cx);
                 cx.notify();
             }
         }))

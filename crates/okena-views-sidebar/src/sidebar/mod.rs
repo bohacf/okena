@@ -184,12 +184,6 @@ pub struct Sidebar {
     pub(crate) focus_manager: Entity<okena_workspace::focus::FocusManager>,
     pub request_broker: Entity<RequestBroker>,
     pub(crate) pending_bulk_cursor: Option<SidebarCursorItem>,
-    pub(crate) expanded_projects: HashSet<String>,
-    /// Projects whose worktree children list is collapsed.
-    /// Uses negative-sense (collapsed) because worktrees should be visible by default.
-    /// This is the inverse of `expanded_projects` which uses positive-sense because
-    /// terminal details should be hidden by default.
-    pub(crate) collapsed_worktrees: HashSet<String>,
     pub terminals: TerminalsRegistry,
     /// Terminal rename state: (project_id, terminal_id)
     pub terminal_rename: Option<RenameState<(String, String)>>,
@@ -325,8 +319,6 @@ impl Sidebar {
             focus_manager,
             request_broker,
             pending_bulk_cursor: None,
-            expanded_projects: HashSet::new(),
-            collapsed_worktrees: HashSet::new(),
             terminals,
             terminal_rename: None,
             terminal_click_detector: ClickDetector::new(),
@@ -471,44 +463,86 @@ impl Sidebar {
         self.terminal_click_detector.check(terminal_id.to_string())
     }
 
-    /// Whether a project row should show its children (layout or worktrees).
-    /// Worktree parents use negative-sense (collapsed set), others use positive-sense (expanded set).
-    pub fn is_project_expanded(&self, project_id: &str, has_worktrees: bool) -> bool {
-        if has_worktrees {
-            !self.collapsed_worktrees.contains(project_id)
+    fn sidebar_tree<'a>(
+        &self,
+        cx: &'a App,
+    ) -> Option<&'a okena_workspace::state::SidebarTreeState> {
+        self.workspace
+            .read(cx)
+            .data()
+            .window(self.window_id)
+            .map(|window| &window.sidebar_tree)
+    }
+
+    pub(crate) fn is_project_expanded(&self, project_id: &str, cx: &App) -> bool {
+        self.sidebar_tree(cx)
+            .is_some_and(|tree| tree.expanded_projects.contains(project_id))
+    }
+
+    pub(crate) fn are_worktrees_expanded(&self, project_id: &str, cx: &App) -> bool {
+        self.sidebar_tree(cx)
+            .is_none_or(|tree| !tree.collapsed_worktrees.contains(project_id))
+    }
+
+    pub(crate) fn toggle_expanded(&mut self, project_id: &str, cx: &mut Context<Self>) {
+        let expanded = !self.is_project_expanded(project_id, cx);
+        self.workspace.update(cx, |ws, cx| {
+            ws.update_sidebar_tree(
+                self.window_id,
+                |tree| tree.set_project_expanded(project_id, expanded),
+                cx,
+            );
+        });
+    }
+
+    pub(crate) fn toggle_worktrees_collapsed(&mut self, project_id: &str, cx: &mut Context<Self>) {
+        self.workspace.update(cx, |ws, cx| {
+            ws.update_sidebar_tree(
+                self.window_id,
+                |tree| {
+                    if !tree.collapsed_worktrees.remove(project_id) {
+                        tree.collapsed_worktrees.insert(project_id.to_owned());
+                    }
+                },
+                cx,
+            );
+        });
+    }
+
+    pub(crate) fn toggle_group(
+        &mut self,
+        project_id: &str,
+        group: GroupKind,
+        cx: &mut Context<Self>,
+    ) {
+        if group == GroupKind::Terminals {
+            self.workspace.update(cx, |ws, cx| {
+                ws.update_sidebar_tree(
+                    self.window_id,
+                    |tree| {
+                        if !tree.collapsed_terminals.remove(project_id) {
+                            tree.collapsed_terminals.insert(project_id.to_owned());
+                        }
+                    },
+                    cx,
+                );
+            });
         } else {
-            self.expanded_projects.contains(project_id)
+            let key = (project_id.to_owned(), group);
+            if !self.collapsed_groups.remove(&key) {
+                self.collapsed_groups.insert(key);
+            }
         }
     }
 
-    pub(crate) fn toggle_expanded(&mut self, project_id: &str) {
-        if self.expanded_projects.contains(project_id) {
-            self.expanded_projects.remove(project_id);
+    pub(crate) fn is_group_collapsed(&self, project_id: &str, group: &GroupKind, cx: &App) -> bool {
+        if *group == GroupKind::Terminals {
+            self.sidebar_tree(cx)
+                .is_some_and(|tree| tree.collapsed_terminals.contains(project_id))
         } else {
-            self.expanded_projects.insert(project_id.to_string());
+            self.collapsed_groups
+                .contains(&(project_id.to_owned(), group.clone()))
         }
-    }
-
-    pub fn toggle_worktrees_collapsed(&mut self, project_id: &str) {
-        if self.collapsed_worktrees.contains(project_id) {
-            self.collapsed_worktrees.remove(project_id);
-        } else {
-            self.collapsed_worktrees.insert(project_id.to_string());
-        }
-    }
-
-    pub(crate) fn toggle_group(&mut self, project_id: &str, group: GroupKind) {
-        let key = (project_id.to_string(), group);
-        if self.collapsed_groups.contains(&key) {
-            self.collapsed_groups.remove(&key);
-        } else {
-            self.collapsed_groups.insert(key);
-        }
-    }
-
-    pub(crate) fn is_group_collapsed(&self, project_id: &str, group: &GroupKind) -> bool {
-        self.collapsed_groups
-            .contains(&(project_id.to_string(), group.clone()))
     }
 
     pub(crate) fn request_context_menu(

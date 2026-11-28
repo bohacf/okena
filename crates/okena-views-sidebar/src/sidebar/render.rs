@@ -298,8 +298,8 @@ impl Sidebar {
                 cursor_items.push(SidebarCursorItem::Project {
                     project_id: id.clone(),
                 });
-                if self.expanded_projects.contains(id) {
-                    self.push_activity_group_cursor_items(info, &mut cursor_items);
+                if self.is_project_expanded(id, cx) {
+                    self.push_activity_group_cursor_items(info, &mut cursor_items, cx);
                 }
                 // No tier header falls between a project and its children, so
                 // `headers_before` is constant across this project's run.
@@ -336,7 +336,7 @@ impl Sidebar {
                     .into_any_element(),
             );
             flat_idx += 1;
-            if self.expanded_projects.contains(&id) {
+            if self.is_project_expanded(&id, cx) {
                 self.render_expanded_children(
                     info,
                     20.0,
@@ -365,6 +365,7 @@ impl Sidebar {
         &self,
         info: &SidebarProjectInfo,
         cursor_items: &mut Vec<SidebarCursorItem>,
+        cx: &App,
     ) {
         // Terminals group
         if !info.terminal_ids.is_empty() {
@@ -372,7 +373,7 @@ impl Sidebar {
                 project_id: info.id.clone(),
                 group: GroupKind::Terminals,
             });
-            if !self.is_group_collapsed(&info.id, &GroupKind::Terminals) {
+            if !self.is_group_collapsed(&info.id, &GroupKind::Terminals, cx) {
                 for tid in &info.terminal_ids {
                     cursor_items.push(SidebarCursorItem::Terminal {
                         project_id: info.id.clone(),
@@ -387,7 +388,7 @@ impl Sidebar {
                 project_id: info.id.clone(),
                 group: GroupKind::Services,
             });
-            if !self.is_group_collapsed(&info.id, &GroupKind::Services) {
+            if !self.is_group_collapsed(&info.id, &GroupKind::Services, cx) {
                 for service in &info.services {
                     cursor_items.push(SidebarCursorItem::Service {
                         project_id: info.id.clone(),
@@ -402,7 +403,7 @@ impl Sidebar {
                 project_id: info.id.clone(),
                 group: GroupKind::Hooks,
             });
-            if !self.is_group_collapsed(&info.id, &GroupKind::Hooks) {
+            if !self.is_group_collapsed(&info.id, &GroupKind::Hooks, cx) {
                 for hook in &info.hook_terminals {
                     cursor_items.push(SidebarCursorItem::Hook {
                         project_id: info.id.clone(),
@@ -576,7 +577,7 @@ impl Sidebar {
 
         // Terminals group
         if !project.terminal_ids.is_empty() {
-            let is_collapsed = self.is_group_collapsed(&project.id, &GroupKind::Terminals);
+            let is_collapsed = self.is_group_collapsed(&project.id, &GroupKind::Terminals, cx);
             let is_cursor = cursor_index == Some(*flat_idx);
             let project_id = project.id.clone();
             flat_elements.push(
@@ -591,7 +592,7 @@ impl Sidebar {
                     cx,
                 )
                 .on_click(cx.listener(move |this, _, _window, cx| {
-                    this.toggle_group(&project_id, GroupKind::Terminals);
+                    this.toggle_group(&project_id, GroupKind::Terminals, cx);
                     cx.notify();
                 }))
                 .into_any_element(),
@@ -633,7 +634,7 @@ impl Sidebar {
 
         // Services group
         if !project.services.is_empty() {
-            let is_collapsed = self.is_group_collapsed(&project.id, &GroupKind::Services);
+            let is_collapsed = self.is_group_collapsed(&project.id, &GroupKind::Services, cx);
             let is_cursor = cursor_index == Some(*flat_idx);
             flat_elements.push(
                 self.render_services_group_header(
@@ -667,7 +668,7 @@ impl Sidebar {
 
         // Hooks group
         if !project.hook_terminals.is_empty() {
-            let is_collapsed = self.is_group_collapsed(&project.id, &GroupKind::Hooks);
+            let is_collapsed = self.is_group_collapsed(&project.id, &GroupKind::Hooks, cx);
             let is_cursor = cursor_index == Some(*flat_idx);
             flat_elements.push(
                 self.render_hooks_group_header(
@@ -1078,7 +1079,7 @@ impl Render for Sidebar {
                         );
                         flat_idx += 1;
 
-                        let is_expanded = self.is_project_expanded(&project.id, true);
+                        let is_expanded = self.are_worktrees_expanded(&project.id, cx);
                         if is_expanded {
                             let guide_start = flat_elements.len();
                             // The main checkout and its worktrees, grouped by
@@ -1125,7 +1126,7 @@ impl Render for Sidebar {
                                         );
                                         flat_idx += 1;
 
-                                        if self.expanded_projects.contains(&project.id) {
+                                        if self.is_project_expanded(&project.id, cx) {
                                             self.render_expanded_children(
                                                 &project,
                                                 34.0,
@@ -1158,7 +1159,7 @@ impl Render for Sidebar {
                                         );
                                         flat_idx += 1;
 
-                                        if self.expanded_projects.contains(&child.id) {
+                                        if self.is_project_expanded(&child.id, cx) {
                                             self.render_expanded_children(
                                                 child,
                                                 34.0,
@@ -1216,7 +1217,7 @@ impl Render for Sidebar {
                         }
                         flat_idx += 1;
 
-                        let show_children = self.expanded_projects.contains(&project.id);
+                        let show_children = self.is_project_expanded(&project.id, cx);
                         if show_children {
                             self.render_expanded_children(
                                 &project,
@@ -1309,7 +1310,7 @@ impl Render for Sidebar {
                                 });
                                 flat_idx += 1;
 
-                                let is_expanded = self.is_project_expanded(&fp.id, true);
+                                let is_expanded = self.are_worktrees_expanded(&fp.id, cx);
                                 if is_expanded {
                                     let guide_start = flat_elements.len();
                                     // The main checkout and its worktrees,
@@ -1355,7 +1356,7 @@ impl Render for Sidebar {
                                                 );
                                                 flat_idx += 1;
 
-                                                if self.expanded_projects.contains(&fp.id) {
+                                                if self.is_project_expanded(&fp.id, cx) {
                                                     self.render_expanded_children(
                                                         fp,
                                                         50.0,
@@ -1390,7 +1391,7 @@ impl Render for Sidebar {
                                                 );
                                                 flat_idx += 1;
 
-                                                if self.expanded_projects.contains(&child.id) {
+                                                if self.is_project_expanded(&child.id, cx) {
                                                     self.render_expanded_children(
                                                         child,
                                                         50.0,
@@ -1450,7 +1451,7 @@ impl Render for Sidebar {
                                 }
                                 flat_idx += 1;
 
-                                let show_children = self.expanded_projects.contains(&fp.id);
+                                let show_children = self.is_project_expanded(&fp.id, cx);
                                 if show_children {
                                     self.render_expanded_children(
                                         fp,

@@ -35,7 +35,7 @@ impl Sidebar {
             cx,
         )
         .on_click(cx.listener(move |this, _, _window, cx| {
-            this.toggle_group(&project_id, GroupKind::Hooks);
+            this.toggle_group(&project_id, GroupKind::Hooks, cx);
             cx.notify();
         }))
     }

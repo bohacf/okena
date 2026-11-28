@@ -24,8 +24,8 @@ use std::path::{Path, PathBuf};
 pub use okena_layout::{LayoutNode, SplitDirection};
 pub use okena_state::{
     DropZone, FocusedTerminalState, FolderData, HookTerminalEntry, HookTerminalStatus,
-    PendingWorktreeClose, ProjectData, ProjectLayoutMode, WindowBounds, WindowId, WindowState,
-    WorkspaceData, WorktreeMetadata, now_unix_seconds,
+    PendingWorktreeClose, ProjectData, ProjectLayoutMode, SidebarTreeState, WindowBounds, WindowId,
+    WindowState, WorkspaceData, WorktreeMetadata, now_unix_seconds,
 };
 
 /// What a window is focused on, captured before a sync reshapes the layout.
@@ -1437,6 +1437,19 @@ impl Workspace {
         });
     }
 
+    /// Update the client-owned sidebar expansion preferences for one window.
+    pub fn update_sidebar_tree(
+        &mut self,
+        window_id: WindowId,
+        update: impl FnOnce(&mut SidebarTreeState),
+        cx: &mut impl WorkspaceCx,
+    ) {
+        if let Some(window) = self.data.window_mut(window_id) {
+            update(&mut window.sidebar_tree);
+            self.notify_data(cx);
+        }
+    }
+
     /// Set a folder's collapsed state on the targeted window.
     ///
     /// Delegates to `data.set_folder_collapsed`, which inserts
@@ -2532,8 +2545,8 @@ impl Workspace {
     ///
     /// Runs the pure reconciliation core (`remote_apply::apply_remote_snapshot`)
     /// on `self.data`/`self.remote_sync`, then applies the GPUI side-effects:
-    /// focuses any newly-created terminals and notifies the UI without bumping
-    /// `data_version` (remote changes shouldn't trigger auto-save).
+    /// focuses any newly-created terminals and schedules a client save if
+    /// reconciliation removed stale sidebar preferences.
     pub fn apply_remote_snapshot(
         &mut self,
         snapshots: &[crate::remote_apply::RemoteSnapshot],
@@ -2624,8 +2637,11 @@ impl Workspace {
         self.apply_requested_terminal_focus(focus_manager, window_id, cx);
         self.apply_requested_fullscreen(focus_manager, window_id, cx);
 
-        // Notify UI without bumping data_version (remote changes shouldn't trigger auto-save)
-        self.notify_ui_only(cx);
+        if outcome.sidebar_tree_changed {
+            self.notify_data(cx);
+        } else {
+            self.notify_ui_only(cx);
+        }
 
         // Terminal names (tab bar, pane overlays) and project colours (pane
         // tint) are drawn by views behind `.cached()`, which a plain notify
