@@ -28,6 +28,13 @@ struct QueuedAction {
     result_tx: Option<async_channel::Sender<Result<serde_json::Value, String>>>,
 }
 
+/// An action that could not be queued. `notify_user` marks the failures
+/// `send_action` toasts; the rest are only logged.
+struct ActionPreflightError {
+    message: String,
+    notify_user: bool,
+}
+
 impl QueuedAction {
     fn can_coalesce_settings(&self) -> bool {
         self.result_tx.is_none() && matches!(self.action, ActionRequest::SetSettings { .. })
@@ -750,45 +757,50 @@ impl RemoteConnectionManager {
     ///
     /// Fire-and-forget from the UI thread, but FIFO within each connection.
     pub fn send_action(&self, connection_id: &str, action: ActionRequest, cx: &mut Context<Self>) {
-        let action = match action_for_daemon(
+        match self.queued_action(connection_id, action, None) {
+            Ok(queued) => {
+                self.action_queues.enqueue(connection_id, queued);
+            }
+            Err(error) if error.notify_user => ToastManager::error(error.message, cx),
+            Err(error) => log::error!("send_action: {}", error.message),
+        }
+    }
+
+    /// Resolve an action and its connection's credentials before it is queued.
+    fn queued_action(
+        &self,
+        connection_id: &str,
+        action: ActionRequest,
+        result_tx: Option<async_channel::Sender<Result<serde_json::Value, String>>>,
+    ) -> Result<QueuedAction, ActionPreflightError> {
+        let Some(connection) = self.connections.get(connection_id) else {
+            return Err(ActionPreflightError {
+                message: format!("Connection {connection_id} not found"),
+                notify_user: false,
+            });
+        };
+        let action = action_for_daemon(
             action,
             self.supports_start_page(connection_id),
             self.supports_command_tabs(connection_id),
-        ) {
-            Ok(action) => action,
-            Err(error) => {
-                ToastManager::error(error.to_string(), cx);
-                return;
-            }
+        )
+        .map_err(|error| ActionPreflightError {
+            message: error.to_string(),
+            notify_user: true,
+        })?;
+        let config = connection.config().clone();
+        let Some(token) = config.effective_auth_token() else {
+            return Err(ActionPreflightError {
+                message: "No auth token for remote connection".to_string(),
+                notify_user: true,
+            });
         };
-        let config = match self.connections.get(connection_id) {
-            Some(conn) => conn.config().clone(),
-            None => {
-                log::error!("send_action: connection {} not found", connection_id);
-                return;
-            }
-        };
-        let token = match config.effective_auth_token() {
-            Some(t) => t,
-            None => {
-                log::error!(
-                    "send_action: no auth token for connection {}",
-                    connection_id
-                );
-                ToastManager::error("No auth token for remote connection".to_string(), cx);
-                return;
-            }
-        };
-
-        self.action_queues.enqueue(
-            connection_id,
-            QueuedAction {
-                config,
-                token,
-                action,
-                result_tx: None,
-            },
-        );
+        Ok(QueuedAction {
+            config,
+            token,
+            action,
+            result_tx,
+        })
     }
 
     /// Latest agent usage snapshot pushed by `connection_id`'s server.
@@ -893,41 +905,17 @@ impl RemoteConnectionManager {
         show_preflight_errors: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Task<Result<serde_json::Value, String>> {
-        let Some(connection) = self.connections.get(connection_id) else {
-            return Task::ready(Err(format!("Connection {connection_id} not found")));
-        };
-        let action = match action_for_daemon(
-            action,
-            self.supports_start_page(connection_id),
-            self.supports_command_tabs(connection_id),
-        ) {
-            Ok(action) => action,
-            Err(error) => {
-                let message = error.to_string();
-                if show_preflight_errors {
-                    ToastManager::error(message.clone(), cx);
-                }
-                return Task::ready(Err(message));
-            }
-        };
-        let config = connection.config().clone();
-        let Some(token) = config.effective_auth_token() else {
-            let message = "No auth token for remote connection".to_string();
-            if show_preflight_errors {
-                ToastManager::error(message.clone(), cx);
-            }
-            return Task::ready(Err(message));
-        };
         let (result_tx, result_rx) = async_channel::bounded(1);
-        let queue = self.action_queues.enqueue(
-            connection_id,
-            QueuedAction {
-                config,
-                token,
-                action,
-                result_tx: Some(result_tx),
-            },
-        );
+        let queued = match self.queued_action(connection_id, action, Some(result_tx)) {
+            Ok(queued) => queued,
+            Err(error) => {
+                if show_preflight_errors && error.notify_user {
+                    ToastManager::error(error.message.clone(), cx);
+                }
+                return Task::ready(Err(error.message));
+            }
+        };
+        let queue = self.action_queues.enqueue(connection_id, queued);
         cx.background_executor().spawn(async move {
             let mut result = std::pin::pin!(result_rx.recv());
             let mut closed = std::pin::pin!(queue.closed());
@@ -1516,6 +1504,7 @@ mod tests {
     use okena_core::ws::ClientPresentationRequest;
     use okena_transport::client::{ConnectionStatus, LOCAL_DAEMON_CONNECTION_ID};
     use okena_workspace::state::{ProjectLayoutMode, WindowId};
+    use okena_workspace::toast::ToastManager;
     use serde_json::json;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::{TcpListener, TcpStream};
@@ -1847,6 +1836,8 @@ mod tests {
             );
             rm.connections.insert(id.clone(), connection);
         });
+        let toasts = ToastManager::new();
+        cx.update(|cx| cx.set_global(toasts.clone()));
         let no_token = manager.update(cx, |rm, cx| {
             rm.send_action_with_result(&id, ActionRequest::SetSettings { patch: json!({}) }, cx)
         });
@@ -1856,6 +1847,23 @@ mod tests {
                 .unwrap_err()
                 .contains("No auth token")
         );
+        assert!(toasts.0.lock().is_empty());
+        // Desktop-initiated actions keep the toast `send_action` shows.
+        let user_no_token = manager.update(cx, |rm, cx| {
+            rm.send_user_action_with_result(
+                &id,
+                ActionRequest::SetSettings { patch: json!({}) },
+                cx,
+            )
+        });
+        assert!(
+            cx.foreground_executor
+                .block_test(user_no_token)
+                .unwrap_err()
+                .contains("No auth token")
+        );
+        let posted: Vec<String> = toasts.0.lock().iter().map(|t| t.message.clone()).collect();
+        assert_eq!(posted, ["No auth token for remote connection"]);
 
         config.saved_token = Some("token".to_string());
         let closed = manager.update(cx, |rm, cx| {
