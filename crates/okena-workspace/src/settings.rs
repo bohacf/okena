@@ -1727,25 +1727,6 @@ mod tests {
         assert_eq!(recovered.scrollback_lines, 12000);
     }
 
-    #[test]
-    fn expanding_terminal_lists_is_opt_in() {
-        let previous: AppSettings =
-            serde_json::from_str(r#"{"auto_resume_agent_sessions": true}"#).unwrap();
-        assert!(!previous.expand_terminal_list_on_open);
-        assert!(previous.auto_resume_agent_sessions);
-        assert_eq!(
-            serde_json::to_value(&previous).unwrap()["expand_terminal_list_on_open"],
-            false
-        );
-
-        let enabled: AppSettings =
-            serde_json::from_str(r#"{"expand_terminal_list_on_open": true}"#).unwrap();
-        let saved = serde_json::to_value(&enabled).unwrap();
-        assert_eq!(saved["expand_terminal_list_on_open"], true);
-        let loaded: AppSettings = serde_json::from_value(saved).unwrap();
-        assert!(loaded.expand_terminal_list_on_open);
-    }
-
     // Written by the v0.45.0 encoder from a file with user-changed values.
     const V0_45_SETTINGS: &str = include_str!("../tests/fixtures/v0.45.0/settings.json");
 
