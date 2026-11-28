@@ -1375,22 +1375,30 @@ mod tests {
         let mut a = WindowState::default();
         a.hidden_project_ids.insert("p1".to_string());
         a.project_widths.insert("p1".to_string(), 0.30);
+        a.sidebar_tree.set_project_expanded("p1", true);
+        a.sidebar_tree.set_project_expanded("p2", true);
         let mut b = WindowState::default();
         b.hidden_project_ids.insert("p1".to_string());
         b.project_widths.insert("p1".to_string(), 0.70);
+        b.sidebar_tree.collapsed_worktrees.insert("p1".into());
+        b.sidebar_tree.collapsed_terminals.insert("p1".into());
         let a_id = a.id;
         let b_id = b.id;
         data.extra_windows.push(a);
         data.extra_windows.push(b);
 
-        data.delete_project_scrub_all_windows("p1");
+        assert!(data.delete_project_scrub_all_windows("p1"));
+        assert!(!data.delete_project_scrub_all_windows("p1"));
 
         let after_a = data.window(WindowId::Extra(a_id)).unwrap();
         assert!(!after_a.hidden_project_ids.contains("p1"));
         assert!(!after_a.project_widths.contains_key("p1"));
+        assert!(!after_a.sidebar_tree.expanded_projects.contains("p1"));
+        assert!(after_a.sidebar_tree.expanded_projects.contains("p2"));
         let after_b = data.window(WindowId::Extra(b_id)).unwrap();
         assert!(!after_b.hidden_project_ids.contains("p1"));
         assert!(!after_b.project_widths.contains_key("p1"));
+        assert_eq!(after_b.sidebar_tree, Default::default());
     }
 
     #[test]

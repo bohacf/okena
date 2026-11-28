@@ -86,7 +86,7 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let t = theme(cx);
-        let is_expanded = self.expanded_projects.contains(&project.id);
+        let is_expanded = self.is_project_expanded(&project.id, cx);
         let project_id = project.id.clone();
         let project_name = project.name.clone();
         let is_renaming_now = is_renaming(&self.project_rename, &project.id);
@@ -135,7 +135,7 @@ impl Sidebar {
                 .on_click(cx.listener({
                     let project_id = project_id.clone();
                     move |this, _, _window, cx| {
-                        this.toggle_expanded(&project_id);
+                        this.toggle_expanded(&project_id, cx);
                         cx.notify();
                         cx.stop_propagation();
                     }
@@ -913,7 +913,7 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let t = theme(cx);
-        let is_expanded = self.is_project_expanded(&project.id, true);
+        let is_expanded = self.are_worktrees_expanded(&project.id, cx);
         let project_id = project.id.clone();
         let project_name = project.name.clone();
         let is_renaming = is_renaming(&self.project_rename, &project.id);
@@ -1045,7 +1045,7 @@ impl Sidebar {
             .on_click(cx.listener({
                 let project_id = project_id.clone();
                 move |this, _, _window, cx| {
-                    this.toggle_worktrees_collapsed(&project_id);
+                    this.toggle_worktrees_collapsed(&project_id, cx);
                     cx.notify();
                     cx.stop_propagation();
                 }

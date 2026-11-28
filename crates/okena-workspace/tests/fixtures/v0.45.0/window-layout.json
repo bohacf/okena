@@ -1,0 +1,64 @@
+{
+  "version": 3,
+  "main_window": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "hidden_project_ids": [
+      "remote:local-daemon:p2"
+    ],
+    "folder_filter": "remote:local-daemon:f1",
+    "project_widths": {
+      "remote:local-daemon:p1": 0.6
+    },
+    "project_width_scale": 900.0,
+    "project_layout": "columns",
+    "project_sort_mode": "manual",
+    "show_attention_section": false,
+    "folder_collapsed": {
+      "remote:local-daemon:f1": true
+    },
+    "os_bounds": {
+      "origin_x": 10.0,
+      "origin_y": 20.0,
+      "width": 1200.0,
+      "height": 800.0
+    },
+    "sidebar_open": true
+  },
+  "extra_windows": [
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "hidden_project_ids": [
+        "remote:server:p3"
+      ],
+      "folder_filter": null,
+      "project_widths": {},
+      "project_layout": "rows",
+      "project_sort_mode": "activity",
+      "show_attention_section": true,
+      "status_lanes_projects": [
+        "remote:local-daemon:p1"
+      ],
+      "status_lanes_overview": true,
+      "folder_collapsed": {},
+      "os_bounds": null
+    }
+  ],
+  "project_layouts": {
+    "remote:local-daemon:p1": {
+      "type": "terminal",
+      "terminal_id": "remote:local-daemon:t1",
+      "minimized": false,
+      "detached": false,
+      "shell_type": {
+        "type": "Default"
+      },
+      "zoom_level": 1.0
+    }
+  },
+  "service_panel_heights": {
+    "remote:local-daemon:p1": 240.0
+  },
+  "hook_panel_heights": {
+    "remote:local-daemon:p1": 180.0
+  }
+}

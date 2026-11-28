@@ -235,28 +235,25 @@ impl WorkspaceData {
 
     /// Remove a project's id from every client-owned presentation store.
     ///
-    /// Walks `main_window` plus every entry in `extra_windows`, and removes
-    /// `project_id` is removed from each window's `hidden_project_ids` and
-    /// `project_widths`, plus the shared service/hook panel-height caches.
-    /// Other per-window fields are left untouched.
+    /// Removes the project's visibility, sizing and sidebar tree preferences
+    /// from every window, plus the shared service/hook panel-height caches.
     ///
     /// Called from the project-delete path so no orphan per-project entries
     /// survive the delete on any window.
-    pub fn delete_project_scrub_all_windows(&mut self, project_id: &str) {
-        self.main_window.hidden_project_ids.remove(project_id);
-        self.main_window.project_widths.remove(project_id);
-        if self.main_window.project_widths.is_empty() {
-            self.main_window.project_width_scale = None;
-        }
-        for extra in &mut self.extra_windows {
-            extra.hidden_project_ids.remove(project_id);
-            extra.project_widths.remove(project_id);
-            if extra.project_widths.is_empty() {
-                extra.project_width_scale = None;
+    /// Returns whether a client-owned sidebar tree changed.
+    pub fn delete_project_scrub_all_windows(&mut self, project_id: &str) -> bool {
+        let mut sidebar_tree_changed = false;
+        for window in std::iter::once(&mut self.main_window).chain(&mut self.extra_windows) {
+            window.hidden_project_ids.remove(project_id);
+            sidebar_tree_changed |= window.sidebar_tree.remove_project(project_id);
+            window.project_widths.remove(project_id);
+            if window.project_widths.is_empty() {
+                window.project_width_scale = None;
             }
         }
         self.service_panel_heights.remove(project_id);
         self.hook_panel_heights.remove(project_id);
+        sidebar_tree_changed
     }
 
     /// Remove a folder id from every window's per-folder storage.
@@ -404,7 +401,7 @@ impl WorkspaceData {
     /// Remove per-window references to projects/folders that no longer exist.
     ///
     /// Walks `main_window` plus every extra and drops any `hidden_project_ids`
-    /// / `project_widths` entry whose project id is not in `self.projects`, any
+    /// / project width / sidebar tree entry whose project is no longer present, any
     /// `folder_collapsed` entry whose folder id is not in `self.folders`, and
     /// clears a `folder_filter` that points at a gone folder.
     ///
@@ -424,6 +421,9 @@ impl WorkspaceData {
             window
                 .hidden_project_ids
                 .retain(|id| valid_projects.contains(id));
+            window
+                .sidebar_tree
+                .retain_projects(|id| valid_projects.contains(id));
             window
                 .project_widths
                 .retain(|id, _| valid_projects.contains(id));

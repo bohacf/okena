@@ -185,7 +185,7 @@ impl Sidebar {
                 project_id: project.id.clone(),
             });
 
-            let is_expanded = self.is_project_expanded(&project.id, true);
+            let is_expanded = self.are_worktrees_expanded(&project.id, cx);
             if is_expanded {
                 // The main checkout and its worktrees, in the grouped order
                 // the rows are drawn in.
@@ -204,12 +204,13 @@ impl Sidebar {
                     cursor_items.push(SidebarCursorItem::WorktreeProject {
                         project_id: member.id.clone(),
                     });
-                    if self.expanded_projects.contains(&member.id) {
+                    if self.is_project_expanded(&member.id, cx) {
                         self.push_group_cursor_items(
                             member,
                             service_names,
                             hook_terminal_ids,
                             cursor_items,
+                            cx,
                         );
                     }
                 }
@@ -220,12 +221,13 @@ impl Sidebar {
                 project_id: project.id.clone(),
             });
 
-            if self.expanded_projects.contains(&project.id) {
+            if self.is_project_expanded(&project.id, cx) {
                 self.push_group_cursor_items(
                     project,
                     service_names,
                     hook_terminal_ids,
                     cursor_items,
+                    cx,
                 );
             }
         }
@@ -238,6 +240,7 @@ impl Sidebar {
         service_names: &HashMap<String, Vec<String>>,
         hook_terminal_ids: &HashMap<String, Vec<String>>,
         cursor_items: &mut Vec<SidebarCursorItem>,
+        cx: &App,
     ) {
         let project_id = project.id.as_str();
         // Terminals group: keyboard navigation follows the rendered tree.
@@ -248,7 +251,7 @@ impl Sidebar {
                 group: GroupKind::Terminals,
             });
 
-            if !self.is_group_collapsed(project_id, &GroupKind::Terminals) {
+            if !self.is_group_collapsed(project_id, &GroupKind::Terminals, cx) {
                 cursor_items.extend(pane_ids.into_iter().map(|terminal_id| {
                     SidebarCursorItem::Terminal {
                         project_id: project_id.to_string(),
@@ -267,7 +270,7 @@ impl Sidebar {
                 group: GroupKind::Services,
             });
 
-            if !self.is_group_collapsed(project_id, &GroupKind::Services) {
+            if !self.is_group_collapsed(project_id, &GroupKind::Services, cx) {
                 for name in names {
                     cursor_items.push(SidebarCursorItem::Service {
                         project_id: project_id.to_string(),
@@ -286,7 +289,7 @@ impl Sidebar {
                 group: GroupKind::Hooks,
             });
 
-            if !self.is_group_collapsed(project_id, &GroupKind::Hooks) {
+            if !self.is_group_collapsed(project_id, &GroupKind::Hooks, cx) {
                 for tid in tids {
                     cursor_items.push(SidebarCursorItem::Hook {
                         project_id: project_id.to_string(),
@@ -467,7 +470,7 @@ impl Sidebar {
                 });
             }
             SidebarCursorItem::GroupHeader { project_id, group } => {
-                self.toggle_group(&project_id, group);
+                self.toggle_group(&project_id, group, cx);
             }
             SidebarCursorItem::Service {
                 project_id,
@@ -579,16 +582,16 @@ impl Sidebar {
                     .worktree_child_ids(&project_id)
                     .is_empty();
                 if has_worktrees {
-                    self.toggle_worktrees_collapsed(&project_id);
+                    self.toggle_worktrees_collapsed(&project_id, cx);
                 } else {
-                    self.toggle_expanded(&project_id);
+                    self.toggle_expanded(&project_id, cx);
                 }
             }
             SidebarCursorItem::WorktreeProject { project_id } => {
-                self.toggle_expanded(&project_id);
+                self.toggle_expanded(&project_id, cx);
             }
             SidebarCursorItem::GroupHeader { project_id, group } => {
-                self.toggle_group(&project_id, group);
+                self.toggle_group(&project_id, group, cx);
             }
             SidebarCursorItem::Terminal { .. }
             | SidebarCursorItem::Service { .. }

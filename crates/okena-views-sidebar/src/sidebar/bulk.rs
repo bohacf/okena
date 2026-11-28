@@ -1,5 +1,5 @@
 //! Bulk presentation changes; never dispatch terminal or daemon actions.
-use super::{GroupKind, Sidebar, SidebarCursorItem, SidebarProjectInfo};
+use super::{Sidebar, SidebarCursorItem, SidebarProjectInfo};
 use gpui::Context;
 use okena_workspace::state::{ProjectData, WorkspaceData};
 use std::{
@@ -108,22 +108,28 @@ impl Sidebar {
             return;
         }
         self.pending_bulk_cursor = selection;
-        for id in targets {
+        self.workspace.update(cx, |ws, cx| {
+            ws.update_sidebar_tree(
+                self.window_id,
+                |tree| {
+                    for id in targets {
+                        tree.set_project_expanded(&id, expanded);
+                        if expanded {
+                            tree.collapsed_terminals.remove(&id);
+                        }
+                    }
+                    if expanded {
+                        tree.collapsed_worktrees.retain(|id| !parents.contains(id));
+                    }
+                },
+                cx,
+            );
             if expanded {
-                self.expanded_projects.insert(id.clone());
-                self.collapsed_groups.remove(&(id, GroupKind::Terminals));
-            } else {
-                self.expanded_projects.remove(&id);
-            }
-        }
-        if expanded {
-            self.collapsed_worktrees.retain(|id| !parents.contains(id));
-            self.workspace.update(cx, |ws, cx| {
                 for folder in folders {
                     ws.set_folder_collapsed(self.window_id, &folder, false, cx);
                 }
-            });
-        }
+            }
+        });
         if !self.is_activity_sort_mode(cx) {
             let items = self.build_cursor_items(cx);
             self.restore_bulk_cursor(&items);
@@ -146,12 +152,12 @@ mod tests {
 
     #[gpui::test]
     fn bulk_expansion_preserves_neighbors_and_groups(cx: &mut gpui::TestAppContext) {
-        use super::{GroupKind, Sidebar};
+        use crate::sidebar::{GroupKind, Sidebar};
         use gpui::AppContext as _;
         use okena_workspace::{
             focus::FocusManager,
             request_broker::RequestBroker,
-            state::{LayoutNode, WindowId, Workspace},
+            state::{LayoutNode, WindowId, WindowState, Workspace},
         };
         let mut data: WorkspaceData = serde_json::from_value(serde_json::json!({
             "version": 1,
@@ -173,6 +179,25 @@ mod tests {
         data.main_window
             .folder_collapsed
             .insert("folder".into(), true);
+        data.main_window
+            .sidebar_tree
+            .collapsed_worktrees
+            .insert("parent".into());
+        data.main_window
+            .sidebar_tree
+            .expanded_projects
+            .insert("recent".into());
+        data.main_window
+            .sidebar_tree
+            .collapsed_terminals
+            .insert("child".into());
+        let mut extra = WindowState::default();
+        extra
+            .sidebar_tree
+            .collapsed_terminals
+            .insert("child".into());
+        let extra_id = WindowId::Extra(extra.id);
+        data.extra_windows.push(extra);
         let sidebar = cx.update(|cx| {
             let workspace = cx.new(|_| Workspace::new(data));
             let focus = cx.new(|_| FocusManager::new());
@@ -189,37 +214,39 @@ mod tests {
             })
         });
         sidebar.update(cx, |sidebar, cx| {
-            sidebar.collapsed_worktrees.insert("parent".into());
-            sidebar.expanded_projects.insert("recent".into());
-            for group in [GroupKind::Terminals, GroupKind::Services, GroupKind::Hooks] {
+            for group in [GroupKind::Services, GroupKind::Hooks] {
                 sidebar.collapsed_groups.insert(("child".into(), group));
             }
             sidebar.set_active_projects_expanded(true, cx);
             sidebar.set_active_projects_expanded(true, cx);
-            assert!(sidebar.expanded_projects.contains("child"));
-            assert!(sidebar.expanded_projects.contains("recent"));
-            assert!(!sidebar.expanded_projects.contains("parent"));
-            assert!(!sidebar.collapsed_worktrees.contains("parent"));
+            assert!(sidebar.is_project_expanded("child", cx));
+            assert!(sidebar.is_project_expanded("recent", cx));
+            assert!(!sidebar.is_project_expanded("parent", cx));
+            assert!(sidebar.are_worktrees_expanded("parent", cx));
             assert!(
                 !sidebar
                     .workspace
                     .read(cx)
                     .is_folder_collapsed(WindowId::Main, "folder")
             );
-            assert!(!sidebar.is_group_collapsed("child", &GroupKind::Terminals));
-            assert!(sidebar.is_group_collapsed("child", &GroupKind::Services));
-            assert!(sidebar.is_group_collapsed("child", &GroupKind::Hooks));
+            assert!(!sidebar.is_group_collapsed("child", &GroupKind::Terminals, cx));
+            assert!(sidebar.is_group_collapsed("child", &GroupKind::Services, cx));
+            assert!(sidebar.is_group_collapsed("child", &GroupKind::Hooks, cx));
             let items = sidebar.build_cursor_items(cx);
             sidebar.cursor_index = items.iter().position(|item| matches!(item, SidebarCursorItem::Terminal { project_id, .. } if project_id == "child"));
             assert!(sidebar.cursor_index.is_some());
             sidebar.set_active_projects_expanded(false, cx);
             sidebar.set_active_projects_expanded(false, cx);
-            assert!(!sidebar.expanded_projects.contains("child"));
+            assert!(!sidebar.is_project_expanded("child", cx));
             let items = sidebar.build_cursor_items(cx);
             assert!(matches!(&items[sidebar.cursor_index.unwrap()], SidebarCursorItem::WorktreeProject { project_id } if project_id == "child"));
-            assert!(sidebar.expanded_projects.contains("recent"));
-            assert!(!sidebar.collapsed_worktrees.contains("parent"));
-            assert!(sidebar.is_group_collapsed("child", &GroupKind::Services));
+            assert!(sidebar.is_project_expanded("recent", cx));
+            assert!(sidebar.are_worktrees_expanded("parent", cx));
+            assert!(sidebar.is_group_collapsed("child", &GroupKind::Services, cx));
+            let ws = sidebar.workspace.read(cx);
+            let extra = &ws.data().window(extra_id).unwrap().sidebar_tree;
+            assert!(extra.collapsed_terminals.contains("child"));
+            assert!(!extra.expanded_projects.contains("child"));
         });
     }
 

@@ -399,7 +399,8 @@ pub(crate) fn validate_workspace_data(
         });
     }
 
-    // Drop per-window references (hidden set, widths, folder-collapse, filter)
+    // Drop per-window references (hidden set, widths, sidebar tree, folder-collapse,
+    // filter)
     // to projects/folders that no longer exist. In-app deletes scrub eagerly;
     // this is the load-time safety net for state that bypassed that path.
     data.scrub_orphan_window_state();
@@ -807,6 +808,9 @@ fn prefix_local_daemon_terminal_ids(layout: &mut LayoutNode) {
 }
 
 fn prefix_local_daemon_window_state_refs(window: &mut WindowState) {
+    window
+        .sidebar_tree
+        .remap_project_ids(prefix_local_daemon_id);
     window.hidden_project_ids = window
         .hidden_project_ids
         .drain()
@@ -1358,7 +1362,7 @@ pub fn default_workspace() -> WorkspaceData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{FolderData, SplitDirection};
+    use crate::state::{FolderData, SidebarTreeState, SplitDirection};
 
     fn test_lock_path() -> PathBuf {
         std::env::temp_dir().join(format!("okena-lock-test-{}", uuid::Uuid::new_v4()))
@@ -1537,6 +1541,11 @@ mod tests {
         main.project_widths.insert("p2".to_string(), 0.4);
         main.folder_filter = Some("f1".to_string());
         main.folder_collapsed.insert("f2".to_string(), true);
+        main.sidebar_tree.set_project_expanded("p1", true);
+        main.sidebar_tree.collapsed_worktrees.insert("p2".into());
+        main.sidebar_tree
+            .collapsed_terminals
+            .insert("remote:server:p3".into());
         main.hidden_project_ids
             .insert("remote:server:p3".to_string());
         let mut layout = ClientWindowLayout {
@@ -1593,6 +1602,19 @@ mod tests {
                 .get("remote:local-daemon:f2")
                 .copied(),
             Some(true),
+        );
+        let tree = &layout.main_window.sidebar_tree;
+        assert_eq!(
+            tree.expanded_projects,
+            std::collections::HashSet::from(["remote:local-daemon:p1".into()])
+        );
+        assert_eq!(
+            tree.collapsed_worktrees,
+            std::collections::HashSet::from(["remote:local-daemon:p2".into()])
+        );
+        assert_eq!(
+            tree.collapsed_terminals,
+            std::collections::HashSet::from(["remote:server:p3".into()])
         );
         let restored = layout
             .project_layouts
@@ -1739,6 +1761,50 @@ mod tests {
             loaded.hook_panel_heights.get("remote:local-daemon:p1"),
             Some(&180.0)
         );
+    }
+
+    // Written by the v0.45.0 encoders. A failing comparison means the on-disk
+    // format changed: confirm the change is intended before regenerating.
+    const V0_45_WINDOW_LAYOUT: &str = include_str!("../tests/fixtures/v0.45.0/window-layout.json");
+    const V0_45_WORKSPACE: &str = include_str!("../tests/fixtures/v0.45.0/workspace.json");
+
+    fn assert_same_json(saved: &str, fixture: &str) {
+        let saved: serde_json::Value = serde_json::from_str(saved).unwrap();
+        let fixture: serde_json::Value = serde_json::from_str(fixture).unwrap();
+        assert_eq!(saved, fixture);
+    }
+
+    #[test]
+    fn v0_45_window_layout_loads_and_saves_unchanged() {
+        let path = test_window_layout_path();
+        std::fs::write(&path, V0_45_WINDOW_LAYOUT).unwrap();
+
+        let loaded = load_window_layout_at(&path, || {
+            panic!("legacy workspace must not be loaded when the client file exists")
+        })
+        .unwrap();
+
+        let _ = std::fs::remove_file(path);
+        // An empty tree is the sidebar default: projects collapsed, worktree
+        // and Terminals groups expanded.
+        for window in std::iter::once(&loaded.main_window).chain(&loaded.extra_windows) {
+            assert_eq!(window.sidebar_tree, SidebarTreeState::default());
+        }
+        assert_same_json(
+            &serde_json::to_string_pretty(&loaded).unwrap(),
+            V0_45_WINDOW_LAYOUT,
+        );
+    }
+
+    #[test]
+    fn v0_45_workspace_loads_and_saves_unchanged() {
+        let content = migrate_legacy_json(V0_45_WORKSPACE).unwrap();
+        let loaded = migrate_workspace(serde_json::from_str(&content).unwrap());
+
+        for window in std::iter::once(&loaded.main_window).chain(&loaded.extra_windows) {
+            assert_eq!(window.sidebar_tree, SidebarTreeState::default());
+        }
+        assert_same_json(&encode_workspace(&loaded).unwrap(), V0_45_WORKSPACE);
     }
 
     #[test]

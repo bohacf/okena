@@ -52,6 +52,65 @@ pub struct WindowBounds {
     pub height: f32,
 }
 
+/// Expansion preferences for project branches and terminal lists in one sidebar.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidebarTreeState {
+    #[serde(default, skip_serializing_if = "HashSet::is_empty")]
+    pub expanded_projects: HashSet<String>,
+    #[serde(default, skip_serializing_if = "HashSet::is_empty")]
+    pub collapsed_worktrees: HashSet<String>,
+    #[serde(default, skip_serializing_if = "HashSet::is_empty")]
+    pub collapsed_terminals: HashSet<String>,
+}
+
+impl SidebarTreeState {
+    fn is_empty(&self) -> bool {
+        self.expanded_projects.is_empty()
+            && self.collapsed_worktrees.is_empty()
+            && self.collapsed_terminals.is_empty()
+    }
+
+    pub fn set_project_expanded(&mut self, project_id: &str, expanded: bool) {
+        if expanded {
+            self.expanded_projects.insert(project_id.to_owned());
+        } else {
+            self.expanded_projects.remove(project_id);
+        }
+    }
+
+    fn project_sets_mut(&mut self) -> [&mut HashSet<String>; 3] {
+        [
+            &mut self.expanded_projects,
+            &mut self.collapsed_worktrees,
+            &mut self.collapsed_terminals,
+        ]
+    }
+
+    pub(crate) fn remove_project(&mut self, project_id: &str) -> bool {
+        let mut removed = false;
+        for set in self.project_sets_mut() {
+            removed |= set.remove(project_id);
+        }
+        removed
+    }
+
+    pub fn retain_projects(&mut self, mut keep: impl FnMut(&str) -> bool) -> bool {
+        let mut changed = false;
+        for set in self.project_sets_mut() {
+            let old_len = set.len();
+            set.retain(|id| keep(id));
+            changed |= set.len() != old_len;
+        }
+        changed
+    }
+
+    pub fn remap_project_ids(&mut self, remap: impl Fn(&str) -> String) {
+        for set in self.project_sets_mut() {
+            *set = set.drain().map(|id| remap(&id)).collect();
+        }
+    }
+}
+
 /// Per-window viewport state. One instance per open window (main + extras).
 ///
 /// `id` is the stable identity that pairs with `WindowId::Extra(Uuid)`. It is
@@ -123,6 +182,8 @@ pub struct WindowState {
     /// Per-folder collapsed state in this window's sidebar.
     #[serde(default)]
     pub folder_collapsed: HashMap<String, bool>,
+    #[serde(default, skip_serializing_if = "SidebarTreeState::is_empty")]
+    pub sidebar_tree: SidebarTreeState,
     /// Last-known OS window bounds (used to restore position on next launch).
     #[serde(default)]
     pub os_bounds: Option<WindowBounds>,
@@ -148,6 +209,7 @@ impl Default for WindowState {
             status_lanes_projects: HashSet::new(),
             status_lanes_overview: false,
             folder_collapsed: HashMap::new(),
+            sidebar_tree: SidebarTreeState::default(),
             os_bounds: None,
             sidebar_open: None,
         }
@@ -193,6 +255,11 @@ mod tests {
             status_lanes_projects: HashSet::new(),
             status_lanes_overview: true,
             folder_collapsed: collapsed,
+            sidebar_tree: SidebarTreeState {
+                expanded_projects: HashSet::from(["checkout".into()]),
+                collapsed_worktrees: HashSet::from(["parent".into()]),
+                collapsed_terminals: HashSet::from(["checkout".into()]),
+            },
             os_bounds: Some(WindowBounds {
                 origin_x: 100.0,
                 origin_y: 50.0,
@@ -221,6 +288,7 @@ mod tests {
             original.status_lanes_overview
         );
         assert_eq!(reloaded.folder_collapsed, original.folder_collapsed);
+        assert_eq!(reloaded.sidebar_tree, original.sidebar_tree);
         assert_eq!(reloaded.os_bounds, original.os_bounds);
         assert_eq!(reloaded.sidebar_open, original.sidebar_open);
     }
@@ -277,6 +345,7 @@ mod tests {
         assert!(s.folder_collapsed.is_empty());
         assert!(s.os_bounds.is_none());
         assert_eq!(s.sidebar_open, None);
+        assert!(s.sidebar_tree.is_empty());
         assert_eq!(s.project_layout, ProjectLayoutMode::Columns);
         assert_eq!(s.project_sort_mode, ProjectSortMode::Manual);
         assert!(!s.show_attention_section);

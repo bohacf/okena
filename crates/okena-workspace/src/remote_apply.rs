@@ -20,7 +20,7 @@ use okena_state::{
 };
 use okena_transport::client::RemoteConnectionConfig;
 
-use crate::remote_sync::RemoteSyncState;
+use crate::remote_sync::{RemoteSyncState, remote_connection_id};
 
 /// Owned snapshot of a single remote connection, built by the view from the
 /// `RemoteConnectionManager` so the pure core never touches a GPUI entity.
@@ -49,6 +49,8 @@ pub struct RemoteSyncOutcome {
     /// Terminals to focus (for projects that had a pending CreateTerminal and
     /// whose layout grew a new terminal during this sync).
     pub focus_targets: Vec<RemoteFocusTarget>,
+    /// Sidebar preferences were removed for a deleted project or removed connection.
+    pub sidebar_tree_changed: bool,
 }
 
 /// The agent status each snapshot reports, keyed by the **client-side**
@@ -369,10 +371,21 @@ pub fn apply_remote_snapshot(
         }
     }
 
+    // The restored sidebar can reference projects that were never materialized in
+    // this process. Only a successful snapshot for their connection proves absence.
+    let mut outcome = RemoteSyncOutcome::default();
+    for window in std::iter::once(&mut data.main_window).chain(&mut data.extra_windows) {
+        outcome.sidebar_tree_changed |= window.sidebar_tree.retain_projects(|id| {
+            remote_connection_id(id).is_none_or(|connection_id| {
+                !synced_conn_ids.contains(connection_id) || expected_remote_ids.contains(id)
+            })
+        });
+    }
+
     for project_id in
         remote_sync.prune_project_state(&active_conn_ids, &synced_conn_ids, &expected_remote_ids)
     {
-        data.delete_project_scrub_all_windows(&project_id);
+        outcome.sidebar_tree_changed |= data.delete_project_scrub_all_windows(&project_id);
     }
 
     // Remove stale remote projects/folders from connections that no longer exist
@@ -399,7 +412,7 @@ pub fn apply_remote_snapshot(
         .map(|f| f.id.clone())
         .collect();
     for project_id in removed_project_ids {
-        data.delete_project_scrub_all_windows(&project_id);
+        outcome.sidebar_tree_changed |= data.delete_project_scrub_all_windows(&project_id);
         remote_sync.remove_project(&project_id);
     }
     for folder_id in removed_folder_ids {
@@ -426,8 +439,6 @@ pub fn apply_remote_snapshot(
         .collect();
     data.project_order
         .retain(|id| valid_ids.contains(id.as_str()));
-
-    let mut outcome = RemoteSyncOutcome::default();
 
     // Land the window's focus after a close the daemon has now applied. Resolved
     // by terminal id rather than path: the removal reshapes the tree (tab groups
@@ -1148,6 +1159,61 @@ mod tests {
     }
 
     #[test]
+    fn saved_sidebar_tree_is_pruned_only_after_a_successful_snapshot() {
+        let mut data = empty_data();
+        data.extra_windows.push(okena_state::WindowState::default());
+        let mut rs = RemoteSyncState::new();
+        let gone = "remote:c1:gone";
+        let bookmark = "remote:c1:bookmark";
+        data.main_window
+            .sidebar_tree
+            .set_project_expanded(gone, true);
+        data.main_window
+            .sidebar_tree
+            .set_project_expanded(bookmark, true);
+        let extra_tree = &mut data.extra_windows[0].sidebar_tree;
+        extra_tree.collapsed_worktrees.insert(gone.into());
+        extra_tree.collapsed_terminals.insert(gone.into());
+
+        let mut snapshot = RemoteSnapshot {
+            config: config("c1"),
+            state: None,
+        };
+        let outcome = apply_remote_snapshot(
+            &mut data,
+            &mut rs,
+            std::slice::from_ref(&snapshot),
+            WindowId::Main,
+        );
+        assert!(!outcome.sidebar_tree_changed);
+        assert!(
+            data.main_window
+                .sidebar_tree
+                .expanded_projects
+                .contains(gone)
+        );
+        assert!(
+            data.extra_windows[0]
+                .sidebar_tree
+                .collapsed_worktrees
+                .contains(gone)
+        );
+
+        snapshot.state = Some(state_with(
+            vec![api_project("bookmark", None)],
+            vec!["bookmark".into()],
+            vec![],
+        ));
+        let outcome = apply_remote_snapshot(&mut data, &mut rs, &[snapshot], WindowId::Main);
+        assert!(outcome.sidebar_tree_changed);
+        assert_eq!(
+            data.main_window.sidebar_tree.expanded_projects,
+            HashSet::from([bookmark.into()])
+        );
+        assert_eq!(data.extra_windows[0].sidebar_tree, Default::default());
+    }
+
+    #[test]
     fn permanent_disconnect_prunes_presentation_and_panel_state() {
         let mut data = empty_data();
         let mut rs = RemoteSyncState::new();
@@ -1168,8 +1234,15 @@ mod tests {
             .insert("remote:c1:a".to_string(), 180.0);
         data.hook_panel_heights
             .insert("remote:c1:a".to_string(), 220.0);
+        data.main_window
+            .sidebar_tree
+            .set_project_expanded("remote:c1:a", true);
+        data.main_window
+            .sidebar_tree
+            .collapsed_terminals
+            .insert("remote:c1:a".into());
 
-        apply_remote_snapshot(
+        let dropped = apply_remote_snapshot(
             &mut data,
             &mut rs,
             &[RemoteSnapshot {
@@ -1178,8 +1251,19 @@ mod tests {
             }],
             WindowId::Main,
         );
-        apply_remote_snapshot(&mut data, &mut rs, &[], WindowId::Main);
+        // A dropped connection keeps the preference for its return.
+        assert!(!dropped.sidebar_tree_changed);
+        assert!(
+            data.main_window
+                .sidebar_tree
+                .expanded_projects
+                .contains("remote:c1:a")
+        );
 
+        let removed = apply_remote_snapshot(&mut data, &mut rs, &[], WindowId::Main);
+
+        assert!(removed.sidebar_tree_changed);
+        assert_eq!(data.main_window.sidebar_tree, Default::default());
         assert!(rs.preserved_project_layouts().is_empty());
         assert!(!data.service_panel_heights.contains_key("remote:c1:a"));
         assert!(!data.hook_panel_heights.contains_key("remote:c1:a"));
