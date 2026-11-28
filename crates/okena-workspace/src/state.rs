@@ -1444,8 +1444,12 @@ impl Workspace {
         update: impl FnOnce(&mut SidebarTreeState),
         cx: &mut impl WorkspaceCx,
     ) {
-        if let Some(window) = self.data.window_mut(window_id) {
-            update(&mut window.sidebar_tree);
+        let Some(window) = self.data.window_mut(window_id) else {
+            return;
+        };
+        let before = window.sidebar_tree.clone();
+        update(&mut window.sidebar_tree);
+        if window.sidebar_tree != before {
             self.notify_data(cx);
         }
     }

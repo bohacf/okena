@@ -399,7 +399,8 @@ pub(crate) fn validate_workspace_data(
         });
     }
 
-    // Drop per-window references (hidden set, widths, folder-collapse, filter)
+    // Drop per-window references (hidden set, widths, sidebar tree, folder-collapse,
+    // filter)
     // to projects/folders that no longer exist. In-app deletes scrub eagerly;
     // this is the load-time safety net for state that bypassed that path.
     data.scrub_orphan_window_state();

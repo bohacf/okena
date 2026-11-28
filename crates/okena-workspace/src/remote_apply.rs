@@ -1234,8 +1234,15 @@ mod tests {
             .insert("remote:c1:a".to_string(), 180.0);
         data.hook_panel_heights
             .insert("remote:c1:a".to_string(), 220.0);
+        data.main_window
+            .sidebar_tree
+            .set_project_expanded("remote:c1:a", true);
+        data.main_window
+            .sidebar_tree
+            .collapsed_terminals
+            .insert("remote:c1:a".into());
 
-        apply_remote_snapshot(
+        let dropped = apply_remote_snapshot(
             &mut data,
             &mut rs,
             &[RemoteSnapshot {
@@ -1244,8 +1251,19 @@ mod tests {
             }],
             WindowId::Main,
         );
-        apply_remote_snapshot(&mut data, &mut rs, &[], WindowId::Main);
+        // A dropped connection keeps the preference for its return.
+        assert!(!dropped.sidebar_tree_changed);
+        assert!(
+            data.main_window
+                .sidebar_tree
+                .expanded_projects
+                .contains("remote:c1:a")
+        );
 
+        let removed = apply_remote_snapshot(&mut data, &mut rs, &[], WindowId::Main);
+
+        assert!(removed.sidebar_tree_changed);
+        assert_eq!(data.main_window.sidebar_tree, Default::default());
         assert!(rs.preserved_project_layouts().is_empty());
         assert!(!data.service_panel_heights.contains_key("remote:c1:a"));
         assert!(!data.hook_panel_heights.contains_key("remote:c1:a"));
